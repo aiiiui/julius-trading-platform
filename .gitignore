@@ -1,0 +1,25 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.egg-info/
+
+# Data cache (large binary files, regenerated on demand)
+data/cache/*.parquet
+
+# Node
+web/node_modules/
+web/dist/
+
+# Build artifacts
+*.log
+.DS_Store
+
+# Agent proposals & reports (committed selectively after review)
+proposals/pending/
+reports/draft/
+
+# Paper trading state (local only)
+paper_trade/state.json
