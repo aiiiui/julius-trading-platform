@@ -187,3 +187,98 @@ export interface SentimentSummary {
 export async function fetchNews(tickers: string[], limit = 30): Promise<{ news: NewsItem[]; sentiment_summary: SentimentSummary }> {
   return get(`/news?tickers=${tickers.join(',')}&limit=${limit}`)
 }
+
+// ── AutoDev Agent ─────────────────────────────────────────────────────────────
+
+export interface AutoDevResult {
+  run_id:        string
+  status:        string
+  branch:        string
+  n_findings:    number
+  n_changes:     number
+  test_passed:   boolean
+  proposal_path: string
+  report_md:     string
+}
+
+export interface AutoDevProposal {
+  run_id:    string
+  filename:  string
+  status:    string
+  branch:    string
+  created:   number
+  report_md: string
+}
+
+export async function runAutodev(focus?: string[]): Promise<AutoDevResult> {
+  return post('/autodev/run', focus ?? ['typescript', 'dead_code', 'performance'])
+}
+
+export async function fetchAutodevProposals(): Promise<AutoDevProposal[]> {
+  const data = await get<{ proposals: AutoDevProposal[] }>('/autodev/proposals')
+  return data.proposals
+}
+
+export async function approveAutodev(runId: string): Promise<{ ok: boolean; message: string }> {
+  return post(`/autodev/approve/${runId}`, {})
+}
+
+export async function rejectAutodev(runId: string): Promise<{ ok: boolean }> {
+  return post(`/autodev/reject/${runId}`, {})
+}
+
+// ── Post-Trade Coach ──────────────────────────────────────────────────────────
+
+export interface TradeAudit {
+  trade_id:          number
+  date:              string
+  sym:               string
+  action:            string
+  price:             number
+  qty:               number
+  pnl:               number | null
+  strategy_signal:   string
+  signal_confidence: number
+  regime:            string
+  verdict:           string
+  notes:             string
+}
+
+export interface LossTrade {
+  sym:        string
+  entry_date: string
+  exit_date:  string
+  pnl:        number
+  pnl_pct:    number
+  root_cause: string
+  explanation: string
+}
+
+export interface PatternFlaw {
+  pattern:           string
+  occurrences:       number
+  tickers_affected:  string[]
+  avg_loss:          number
+  recommendation:    string
+}
+
+export interface PostTradeReport {
+  overall_grade:   string
+  trade_audits:    TradeAudit[]
+  losing_trades:   LossTrade[]
+  drift_flags:     { parameter: string; backtest_value: number; live_value: number; deviation_pct: number; impact: string }[]
+  pattern_flaws:   PatternFlaw[]
+  lessons_learned: string
+  recommendations: string[]
+  report_md:       string
+  report_path:     string
+}
+
+export async function runPostTradeAnalysis(): Promise<PostTradeReport> {
+  return post('/postrade/analyze', {})
+}
+
+export async function fetchPostTradeReports(): Promise<{ filename: string; created: number; report_md: string }[]> {
+  const data = await get<{ reports: { filename: string; created: number; report_md: string }[] }>('/postrade/reports')
+  return data.reports
+}

@@ -505,3 +505,208 @@ async def get_news(
     items = await asyncio.to_thread(fetch_news, ticker_list, True, limit)
     summary = market_sentiment_summary(items)
     return {"news": items, "sentiment_summary": summary}
+
+
+# ── AutoDev Agent ─────────────────────────────────────────────────────────────
+
+import uuid as _uuid
+from pathlib import Path as _Path
+
+_autodev_runs: dict = {}   # run_id → state snapshot
+
+@app.post("/api/autodev/run")
+async def autodev_run(focus: list[str] = None):
+    """Trigger an AutoDev analysis + proposal cycle."""
+    from agents.autodev.graph import get_autodev_graph
+    import traceback as _tb
+
+    run_id = str(_uuid.uuid4())[:8]
+    focus  = focus or ["typescript", "dead_code", "performance"]
+
+    initial: dict = {
+        "run_id":          run_id,
+        "focus_areas":     focus,
+        "findings":        [],
+        "plan":            "",
+        "branch_name":     "",
+        "changes_applied": [],
+        "test_output":     "",
+        "test_passed":     False,
+        "proposal_path":   "",
+        "report_md":       "",
+        "status":          "analyzing",
+        "error":           "",
+    }
+
+    try:
+        graph  = get_autodev_graph()
+        result = await asyncio.to_thread(graph.invoke, initial)
+        _autodev_runs[run_id] = result
+        return {
+            "run_id":        run_id,
+            "status":        result.get("status"),
+            "branch":        result.get("branch_name"),
+            "n_findings":    len(result.get("findings", [])),
+            "n_changes":     len(result.get("changes_applied", [])),
+            "test_passed":   result.get("test_passed"),
+            "proposal_path": result.get("proposal_path"),
+            "report_md":     result.get("report_md"),
+        }
+    except Exception:
+        raise HTTPException(500, f"AutoDev error: {_tb.format_exc()}")
+
+
+@app.get("/api/autodev/proposals")
+async def autodev_proposals():
+    """List all pending proposal markdown files."""
+    proposals_dir = _Path(__file__).parent / "proposals"
+    proposals_dir.mkdir(exist_ok=True)
+    items = []
+    for f in sorted(proposals_dir.glob("*.md"), reverse=True):
+        run_id = f.stem
+        state  = _autodev_runs.get(run_id, {})
+        items.append({
+            "run_id":   run_id,
+            "filename": f.name,
+            "status":   state.get("status", "proposed"),
+            "branch":   state.get("branch_name", ""),
+            "created":  f.stat().st_mtime,
+            "report_md": f.read_text(encoding="utf-8"),
+        })
+    return {"proposals": items}
+
+
+@app.post("/api/autodev/approve/{run_id}")
+async def autodev_approve(run_id: str):
+    """Merge the approved AutoDev branch into main."""
+    from agents.autodev.nodes import merge_branch
+
+    state = _autodev_runs.get(run_id)
+    if not state:
+        # Try to reconstruct branch name from proposals file
+        proposal = _Path(__file__).parent / "proposals" / f"{run_id}.md"
+        if not proposal.exists():
+            raise HTTPException(404, f"No proposal found for run_id={run_id}")
+        # Can't merge without knowing branch — mark as needing manual merge
+        raise HTTPException(400, "Run state not in memory — restart server and re-run AutoDev, or merge manually.")
+
+    result = await asyncio.to_thread(merge_branch, state)
+    if result.get("status") == "approved":
+        _autodev_runs[run_id] = {**state, **result}
+        return {"ok": True, "message": f"Branch {state['branch_name']} merged into main."}
+    raise HTTPException(500, result.get("error", "Merge failed"))
+
+
+@app.post("/api/autodev/reject/{run_id}")
+async def autodev_reject(run_id: str):
+    """Reject a proposal — deletes the branch without merging."""
+    import subprocess as _sp
+    state = _autodev_runs.get(run_id, {})
+    branch = state.get("branch_name", "")
+    if branch:
+        _sp.run(["git", "branch", "-D", branch],
+                cwd=str(_Path(__file__).parent), capture_output=True)
+    _autodev_runs[run_id] = {**state, "status": "rejected"}
+    return {"ok": True}
+
+
+# ── Post-Trade Coach ──────────────────────────────────────────────────────────
+
+@app.post("/api/postrade/analyze")
+async def postrade_analyze():
+    """Run the post-trade coach on the current paper portfolio trade history."""
+    from agents.postrade.graph import get_postrade_graph
+    import traceback as _tb
+
+    portfolio = JuliusPortfolio.load()
+    if not portfolio:
+        raise HTTPException(400, "No portfolio found. Initialize one first.")
+
+    trades = [
+        {
+            "date":   t.get("date", ""),
+            "sym":    t.get("sym", ""),
+            "action": t.get("action", ""),
+            "price":  t.get("price", 0),
+            "qty":    t.get("qty", 0),
+            "pnl":    t.get("pnl"),
+        }
+        for t in (portfolio.get("trades") or [])
+    ]
+
+    if not trades:
+        raise HTTPException(400, "No trade history found. Execute some paper trades first.")
+
+    bt_params = {
+        "n_trades":  len(trades),
+        "n_days":    252,
+        "live_days": len(set(t["date"] for t in trades)),
+        "win_rate":  _cache.get("batch_results") and _compute_bt_winrate(),
+    }
+
+    initial: dict = {
+        "trades":          trades,
+        "backtest_params": bt_params,
+        "regime_labels":   [],
+        "trade_audits":    [],
+        "losing_trades":   [],
+        "drift_flags":     [],
+        "pattern_flaws":   [],
+        "lessons_learned": "",
+        "recommendations": [],
+        "overall_grade":   "C",
+        "report_md":       "",
+        "report_path":     "",
+        "error":           "",
+    }
+
+    try:
+        graph  = get_postrade_graph()
+        result = await asyncio.to_thread(graph.invoke, initial)
+        return {
+            "overall_grade":    result.get("overall_grade"),
+            "trade_audits":     result.get("trade_audits", []),
+            "losing_trades":    result.get("losing_trades", []),
+            "drift_flags":      result.get("drift_flags", []),
+            "pattern_flaws":    result.get("pattern_flaws", []),
+            "lessons_learned":  result.get("lessons_learned"),
+            "recommendations":  result.get("recommendations", []),
+            "report_md":        result.get("report_md"),
+            "report_path":      result.get("report_path"),
+        }
+    except Exception:
+        raise HTTPException(500, f"Post-trade analysis error: {_tb.format_exc()}")
+
+
+@app.get("/api/postrade/reports")
+async def postrade_reports():
+    """List all saved post-trade reports."""
+    reports_dir = _Path(__file__).parent / "reports"
+    reports_dir.mkdir(exist_ok=True)
+    items = []
+    for f in sorted(reports_dir.glob("postrade_*.md"), reverse=True):
+        items.append({
+            "filename":  f.name,
+            "created":   f.stat().st_mtime,
+            "report_md": f.read_text(encoding="utf-8"),
+        })
+    return {"reports": items}
+
+
+def _compute_bt_winrate() -> Optional[float]:
+    """Pull average win rate from cached backtest results."""
+    batch = _cache.get("batch_results")
+    if not batch:
+        return None
+    win_rates = []
+    for ticker, strats in batch.items():
+        if ticker == "PAIRS":
+            continue
+        for _, res in strats.items():
+            wr = (res.get("metrics") or {}).get("win_rate")
+            if wr is not None:
+                try:
+                    win_rates.append(float(wr))
+                except Exception:
+                    pass
+    return float(sum(win_rates) / len(win_rates)) if win_rates else None

@@ -5,6 +5,7 @@ import TabPortfolio from './tabs/TabPortfolio'
 import TabComparison from './tabs/TabComparison'
 import TabAI        from './tabs/TabAI'
 import TabRegime    from './tabs/TabRegime'
+import TabAgents    from './tabs/TabAgents'
 import { runBacktest, fetchLivePrices, fetchStrategies } from './api'
 import TickerTagInput from './components/TickerTagInput'
 import type { BacktestResponse, RunSettings, Tweaks } from './types'
@@ -15,6 +16,7 @@ const TABS = [
   { id: 'ai',         label: 'AI Analysis',          Icon: Icons.Brain,  short: '3' },
   { id: 'regime',     label: 'Regime Analysis',      Icon: Icons.Thermo, short: '4' },
   { id: 'live',       label: 'Live Markets',         Icon: Icons.Pulse,  short: '5', live: true },
+  { id: 'agents',     label: 'Agents',               Icon: Icons.Brain,  short: '6' },
 ] as const
 
 type TabId = typeof TABS[number]['id']
@@ -293,9 +295,10 @@ export default function App() {
           )}
 
           {/* Tab content */}
-          {tab === 'live' && <TabLive pushToast={push} theme={tweaks.theme}/>}
+          {tab === 'live'   && <TabLive   pushToast={push} theme={tweaks.theme}/>}
+          {tab === 'agents' && <TabAgents pushToast={push}/>}
 
-          {tab !== 'live' && !btData && (
+          {tab !== 'live' && tab !== 'agents' && !btData && (
             <div style={{ display: 'grid', placeItems: 'center', minHeight: 400 }}>
               <div style={{ textAlign: 'center', maxWidth: 440 }}>
                 <div style={{ fontFamily: 'var(--serif)', fontStyle: 'italic', fontSize: 32, marginBottom: 12 }}>No backtest data</div>
