@@ -15,6 +15,7 @@ import asyncio
 import math
 from datetime import date, timedelta
 from typing import Optional
+from pathlib import Path as _Path
 
 import numpy as np
 import pandas as pd
@@ -37,9 +38,14 @@ import requests as _requests
 
 app = FastAPI(title="Julius Trading Platform", version="1.0.0")
 
+_cors_origins = os.environ.get(
+    "ALLOWED_ORIGINS",
+    "http://localhost:5173,http://localhost:4173,http://localhost:3000"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:4173", "http://localhost:3000"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -510,7 +516,6 @@ async def get_news(
 # ── AutoDev Agent ─────────────────────────────────────────────────────────────
 
 import uuid as _uuid
-from pathlib import Path as _Path
 
 _autodev_runs: dict = {}   # run_id → state snapshot
 
@@ -710,3 +715,77 @@ def _compute_bt_winrate() -> Optional[float]:
                 except Exception:
                     pass
     return float(sum(win_rates) / len(win_rates)) if win_rates else None
+
+
+# ── Pine Script Export ────────────────────────────────────────────────────────
+
+from fastapi.responses import PlainTextResponse
+from exports.pine_injector import generate_signal_injector
+
+
+@app.get("/api/export/pine_mtf", response_class=PlainTextResponse)
+def export_pine_mtf():
+    """Return the multi-timeframe RSI+BB Pine Script strategy as a download."""
+    pine_path = _Path(__file__).parent / "exports" / "rsi_bollinger_mtf.pine"
+    if not pine_path.exists():
+        raise HTTPException(500, "MTF Pine Script file not found on server.")
+    return PlainTextResponse(
+        content=pine_path.read_text(encoding="utf-8"),
+        headers={
+            "Content-Disposition": 'attachment; filename="julius_rsibb_mtf_strategy.pine"',
+            "Content-Type": "text/plain; charset=utf-8",
+        },
+    )
+
+
+@app.get("/api/export/pine/{ticker}", response_class=PlainTextResponse)
+def export_pine(ticker: str):
+    """
+    Return a Pine Script v5 indicator that embeds the cached RSI+BB backtest
+    signals for the given ticker as hardcoded timestamps.
+
+    Requires a prior /api/run_backtest call with that ticker included.
+    Response is plain text so the browser downloads it directly.
+    """
+    ticker = ticker.upper()
+    batch  = _cache.get("batch_results")
+    if not batch:
+        raise HTTPException(404, "No backtest results cached. Run /api/run_backtest first.")
+
+    ticker_results = batch.get(ticker)
+    if not ticker_results:
+        raise HTTPException(404, f"Ticker {ticker} not found in cached results. Re-run backtest with it included.")
+
+    RSI_BB_KEY = "RSI + Bollinger Bands"
+    strat_result = ticker_results.get(RSI_BB_KEY)
+    if not strat_result:
+        available = list(ticker_results.keys())
+        raise HTTPException(
+            404,
+            f"RSI + Bollinger Bands strategy not in cached results for {ticker}. "
+            f"Available: {available}"
+        )
+
+    signals = strat_result.get("signals")
+    if signals is None or not hasattr(signals, "__len__"):
+        raise HTTPException(500, "Signal series missing from cached result.")
+
+    # Derive the date range from the signal index
+    start = str(signals.index[0].date())
+    end   = str(signals.index[-1].date())
+
+    script = generate_signal_injector(
+        ticker  = ticker,
+        signals = signals,
+        start   = start,
+        end     = end,
+    )
+
+    filename = f"julius_{ticker.lower()}_rsibb_signals.pine"
+    return PlainTextResponse(
+        content = script,
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Type":        "text/plain; charset=utf-8",
+        },
+    )

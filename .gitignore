@@ -7,7 +7,7 @@ __pycache__/
 *.egg-info/
 
 # Data cache (large binary files, regenerated on demand)
-data/cache/*.parquet
+data/cache/
 
 # Node
 web/node_modules/

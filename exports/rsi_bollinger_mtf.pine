@@ -1,0 +1,224 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Julius Trading Platform — RSI + Bollinger Bands  ·  Multi-Timeframe
+// Pine Script v5  |  Paste into TradingView on a 15m or 1H chart
+//
+// TIMEFRAME STACK
+// ───────────────
+//   PRIMARY  (default 4H) — drives the BUY / SELL trigger
+//     BUY  when  RSI < oversold  AND  close ≤ lower BB
+//     SELL when  RSI > overbought AND  close ≥ upper BB
+//
+//   CONFIRMATION (default 1H) — trend alignment filter
+//     BUY  valid  only when 1H RSI < 55  (bearish momentum not yet reversed)
+//     SELL valid  only when 1H RSI > 45  (bullish momentum not yet reversed)
+//     → Toggle "Require confirmation" OFF to bypass this filter
+//
+//   ENTRY TIMING — the chart you're running on (e.g. 15m or 1H)
+//     Markers appear on the exact bar where the 4H trigger first fires.
+//     Dotted-circle = 4H triggered but 1H hasn't confirmed yet.
+//
+// DASHBOARD (top-right)
+//     RSI level + BB position for all three timeframes at a glance.
+//
+// BANDS PLOTTED
+//     Solid blue  = primary TF (4H) Bollinger Bands
+//     Teal dots   = chart-TF Bollinger Bands  (entry reference)
+//
+// MATH — identical to Julius Python backtest
+//     RSI → Wilder's smoothing  ta.rsi() = ewm(alpha=1/period, adjust=False)
+//     BB  → SMA ± n × stdev(ddof=1) = ta.bb()
+// ════════════════════════════════════════════════════════════════════════════
+
+//@version=5
+strategy(
+    title              = "Julius | MTF RSI + BB",
+    shorttitle         = "Julius MTF RSI+BB",
+    overlay            = true,
+    default_qty_type   = strategy.percent_of_equity,
+    default_qty_value  = 100,
+    commission_type    = strategy.commission.percent,
+    commission_value   = 0.1,
+    slippage           = 1,
+    calc_on_every_tick = false
+)
+
+// ── Timeframe inputs ──────────────────────────────────────────────────────────
+grpTF = "⏱ Timeframes"
+tf_primary = input.timeframe("240", "Primary TF — signal",       options=["60","120","240","D"], group=grpTF)
+tf_confirm = input.timeframe("60",  "Confirmation TF — filter",  options=["15","30","60","120"], group=grpTF)
+useConfirm = input.bool(true,       "Require confirmation filter",                               group=grpTF)
+
+// ── RSI + BB inputs ───────────────────────────────────────────────────────────
+grpRSI = "📊 RSI"
+rsiPeriod     = input.int  (14,   "Period",          minval=2,  maxval=50,               group=grpRSI)
+rsiOversold   = input.float(30.0, "Oversold level",  minval=5,  maxval=49, step=1,       group=grpRSI)
+rsiOverbought = input.float(70.0, "Overbought level",minval=51, maxval=95, step=1,       group=grpRSI)
+
+grpBB = "📈 Bollinger Bands"
+bbPeriod = input.int  (20,  "Period",   minval=5,   maxval=200,              group=grpBB)
+bbStdDev = input.float(2.0, "Std Dev",  minval=0.5, maxval=4.0, step=0.1,   group=grpBB)
+
+grpVis = "🎨 Display"
+showBands   = input.bool(true, "Show Bollinger Bands",   group=grpVis)
+showLabels  = input.bool(true, "Show BUY / SELL labels", group=grpVis)
+showDash    = input.bool(true, "Show MTF dashboard",     group=grpVis)
+
+// ── Compute indicators across timeframes (via helper functions) ───────────────
+// Primary TF: RSI + full BB + close
+f_primary_all() =>
+    _rsi = ta.rsi(close, rsiPeriod)
+    [_bbU, _bbM, _bbL] = ta.bb(close, bbPeriod, bbStdDev)
+    [_rsi, _bbU, _bbM, _bbL, close]
+
+[rsi_p, bbU_p, bbM_p, bbL_p, close_p] =
+    request.security(syminfo.tickerid, tf_primary, f_primary_all(), lookahead=barmerge.lookahead_off)
+
+// Confirmation TF: RSI only
+f_confirm_rsi() => ta.rsi(close, rsiPeriod)
+float rsi_c = request.security(syminfo.tickerid, tf_confirm, f_confirm_rsi(), lookahead=barmerge.lookahead_off)
+
+// Chart (entry) TF: live RSI + BB on the chart's own candles
+float rsi_e = ta.rsi(close, rsiPeriod)
+[bbU_e, bbM_e, bbL_e] = ta.bb(close, bbPeriod, bbStdDev)
+
+// ── Signal logic ──────────────────────────────────────────────────────────────
+// 4H primary trigger
+bool buy_primary  = rsi_p < rsiOversold   and close_p <= bbL_p
+bool sell_primary = rsi_p > rsiOverbought and close_p >= bbU_p
+
+// 1H confirmation filter
+bool buy_ok   = buy_primary  and (not useConfirm or rsi_c < 55)
+bool sell_ok  = sell_primary and (not useConfirm or rsi_c > 45)
+
+// SELL takes priority when both simultaneously true
+bool longSignal  = buy_ok  and not sell_ok
+bool shortSignal = sell_ok
+
+// Pending = 4H triggered but 1H hasn't confirmed (only shown when useConfirm is on)
+bool pendingBuy  = buy_primary  and not buy_ok  and useConfirm
+bool pendingSell = sell_primary and not sell_ok and useConfirm
+
+// ── Strategy orders ───────────────────────────────────────────────────────────
+if shortSignal
+    strategy.close("Long", comment="SELL · 4H OB+BB")
+
+if longSignal
+    strategy.entry("Long", strategy.long, comment="BUY · 4H OS+BB")
+
+// ── Bollinger Band plots ──────────────────────────────────────────────────────
+// Primary TF bands (solid blue) — drawn at 4H price levels
+pU_p = plot(showBands ? bbU_p : na, "BB Upper (primary TF)",  color=color.new(color.blue, 50), linewidth=1)
+pM_p = plot(showBands ? bbM_p : na, "BB Mid (primary TF)",    color=color.new(color.blue, 68), linewidth=1)
+pL_p = plot(showBands ? bbL_p : na, "BB Lower (primary TF)",  color=color.new(color.blue, 50), linewidth=1)
+fill(pU_p, pL_p, color=color.new(color.blue, 88), title="BB Fill")
+
+// Chart-TF bands (teal dotted) — for entry precision
+plot(showBands ? bbU_e : na, "BB Upper (chart TF)", color=color.new(color.teal, 70), linewidth=1, style=plot.style_circles)
+plot(showBands ? bbL_e : na, "BB Lower (chart TF)", color=color.new(color.teal, 70), linewidth=1, style=plot.style_circles)
+
+// ── Signal labels ─────────────────────────────────────────────────────────────
+plotshape(showLabels and longSignal,
+    title    ="BUY",  style=shape.labelup,   location=location.belowbar,
+    color    =color.new(color.green, 0), textcolor=color.white, text="B", size=size.normal)
+
+plotshape(showLabels and shortSignal,
+    title    ="SELL", style=shape.labeldown, location=location.abovebar,
+    color    =color.new(color.red, 0),   textcolor=color.white, text="S", size=size.normal)
+
+// Dotted circles = 4H triggered but awaiting 1H confirmation
+plotshape(showLabels and pendingBuy,
+    title    ="Pending BUY",  style=shape.circle, location=location.belowbar,
+    color    =color.new(color.green, 45), size=size.small)
+
+plotshape(showLabels and pendingSell,
+    title    ="Pending SELL", style=shape.circle, location=location.abovebar,
+    color    =color.new(color.red, 45),   size=size.small)
+
+// Bar tint when long position open
+barcolor(strategy.position_size > 0 ? color.new(color.green, 78) : na)
+
+// ── Multi-TF dashboard ────────────────────────────────────────────────────────
+_tf_label(tf) =>
+    tf == "D"   ? "Daily" :
+     tf == "240" ? "4H"  :
+     tf == "120" ? "2H"  :
+     tf == "60"  ? "1H"  :
+     tf == "30"  ? "30m" : "15m"
+
+_rsi_col(r) =>
+    r <= rsiOversold  ? color.new(color.green, 5)  :
+     r >= rsiOverbought ? color.new(color.red,   5)  :
+     r < 50             ? color.new(color.teal,  20) :
+                          color.new(color.orange, 20)
+
+_rsi_lbl(r) =>
+    r <= rsiOversold  ? "OVERSOLD" :
+     r >= rsiOverbought ? "OVERBOUGHT" :
+     r < 50             ? "Weak (<50)" : "Strong (>50)"
+
+_bb_lbl(c, u, l) =>
+    c >= u ? "≥ Upper" : c <= l ? "≤ Lower" : "Inside"
+
+_bb_col(c, u, l) =>
+    c >= u ? color.new(color.red, 10) :
+     c <= l ? color.new(color.green, 10) :
+               color.new(color.gray, 55)
+
+var table dash = table.new(position.top_right, 4, 5,
+    bgcolor      = color.new(color.white, 80),
+    border_color = color.new(color.gray,  50),
+    border_width = 1,
+    frame_color  = color.new(color.gray,  30),
+    frame_width  = 1
+)
+
+// current chart TF label
+string chart_tf = timeframe.isminutes ?
+     str.tostring(timeframe.multiplier) + "m" :
+     timeframe.ishours ? str.tostring(timeframe.multiplier) + "H" : "D"
+
+if barstate.islast and showDash
+    // Header row
+    color hdr_bg  = color.new(#1d4ed8, 85)
+    color hdr_txt = color.new(#1d4ed8, 10)
+    table.cell(dash, 0, 0, "TF",       bgcolor=hdr_bg, text_color=hdr_txt, text_size=size.small, text_halign=text.align_center)
+    table.cell(dash, 1, 0, "RSI",      bgcolor=hdr_bg, text_color=hdr_txt, text_size=size.small, text_halign=text.align_center)
+    table.cell(dash, 2, 0, "BB pos",   bgcolor=hdr_bg, text_color=hdr_txt, text_size=size.small, text_halign=text.align_center)
+    table.cell(dash, 3, 0, "Status",   bgcolor=hdr_bg, text_color=hdr_txt, text_size=size.small, text_halign=text.align_center)
+
+    // Primary TF row
+    string p_stat = buy_primary ? "TRIGGER ▲" : sell_primary ? "TRIGGER ▼" : "—"
+    color  p_sc   = buy_primary ? color.new(color.green,0) : sell_primary ? color.new(color.red,0) : color.new(color.gray,40)
+    table.cell(dash, 0, 1, _tf_label(tf_primary),                        text_size=size.small, text_halign=text.align_center)
+    table.cell(dash, 1, 1, str.tostring(math.round(rsi_p, 1)),           text_size=size.small, text_halign=text.align_center, text_color=_rsi_col(rsi_p),    bgcolor=color.new(_rsi_col(rsi_p), 88))
+    table.cell(dash, 2, 1, _bb_lbl(close_p, bbU_p, bbL_p),              text_size=size.small, text_halign=text.align_center, text_color=_bb_col(close_p, bbU_p, bbL_p))
+    table.cell(dash, 3, 1, p_stat,                                        text_size=size.small, text_halign=text.align_center, text_color=p_sc)
+
+    // Confirmation TF row
+    string c_stat = (buy_primary  and rsi_c < 55) ? "CONFIRM ✓" :
+                    (sell_primary and rsi_c > 45) ? "CONFIRM ✓" :
+                    (buy_primary  or sell_primary) ? "WAITING…"  : "—"
+    color  c_sc   = str.contains(c_stat, "✓") ? color.new(color.green,0) :
+                    str.contains(c_stat, "WAITING") ? color.new(color.orange,0) :
+                    color.new(color.gray,40)
+    table.cell(dash, 0, 2, _tf_label(tf_confirm),                        text_size=size.small, text_halign=text.align_center)
+    table.cell(dash, 1, 2, str.tostring(math.round(rsi_c, 1)),           text_size=size.small, text_halign=text.align_center, text_color=_rsi_col(rsi_c), bgcolor=color.new(_rsi_col(rsi_c), 88))
+    table.cell(dash, 2, 2, "—",                                           text_size=size.small, text_halign=text.align_center, text_color=color.new(color.gray,40))
+    table.cell(dash, 3, 2, c_stat,                                        text_size=size.small, text_halign=text.align_center, text_color=c_sc)
+
+    // Entry TF row (chart)
+    string e_stat = longSignal ? "LONG ENTRY" : shortSignal ? "EXIT LONG" : pendingBuy or pendingSell ? "PENDING…" : "—"
+    color  e_sc   = longSignal ? color.new(color.green,0) : shortSignal ? color.new(color.red,0) :
+                    (pendingBuy or pendingSell) ? color.new(color.orange,0) : color.new(color.gray,40)
+    table.cell(dash, 0, 3, chart_tf,                                      text_size=size.small, text_halign=text.align_center)
+    table.cell(dash, 1, 3, str.tostring(math.round(rsi_e, 1)),           text_size=size.small, text_halign=text.align_center, text_color=_rsi_col(rsi_e), bgcolor=color.new(_rsi_col(rsi_e), 88))
+    table.cell(dash, 2, 3, _bb_lbl(close, bbU_e, bbL_e),                 text_size=size.small, text_halign=text.align_center, text_color=_bb_col(close, bbU_e, bbL_e))
+    table.cell(dash, 3, 3, e_stat,                                        text_size=size.small, text_halign=text.align_center, text_color=e_sc)
+
+    // Footer: params
+    string confirm_mode = useConfirm ? "✓ Confirm ON" : "✗ Confirm OFF"
+    color  cm_col       = useConfirm ? color.new(color.green,20) : color.new(color.orange,20)
+    table.cell(dash, 0, 4, "Julius Platform",  text_size=size.tiny, text_halign=text.align_center, text_color=color.new(color.gray,35))
+    table.cell(dash, 1, 4, "RSI " + str.tostring(rsiOversold) + "/" + str.tostring(rsiOverbought), text_size=size.tiny, text_halign=text.align_center, text_color=color.new(color.gray,35))
+    table.cell(dash, 2, 4, "BB(" + str.tostring(bbPeriod) + "," + str.tostring(bbStdDev) + "σ)",  text_size=size.tiny, text_halign=text.align_center, text_color=color.new(color.gray,35))
+    table.cell(dash, 3, 4, confirm_mode,        text_size=size.tiny, text_halign=text.align_center, text_color=cm_col)

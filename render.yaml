@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: julius-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ALLOWED_ORIGINS
+        sync: false   # set this in Render dashboard after Vercel deploy URL is known
+      - key: ANTHROPIC_API_KEY
+        sync: false   # optional — AI recommendations node only
+    autoDeploy: true

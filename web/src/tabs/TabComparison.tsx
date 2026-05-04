@@ -165,7 +165,47 @@ export default function TabComparison({ data, theme = 'light' }: {
       <div className="card">
         <div className="card-header">
           <h3 className="card-title">Performance metrics — {focus}</h3>
-          <span className="tag">{strategies.length} strategies</span>
+          <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+            <span className="tag">{strategies.length} strategies</span>
+            {strategies.includes('RSI + Bollinger Bands') && (
+              <>
+                <a
+                  href={`/api/export/pine/${focus}`}
+                  download={`julius_${focus.toLowerCase()}_rsibb_signals.pine`}
+                  title="Download RSI + BB historical signals (daily) as a Pine Script indicator — matches the Python backtest exactly"
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                    padding: '4px 10px', borderRadius: 6, fontSize: 12,
+                    background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                    color: 'var(--text-muted)', textDecoration: 'none', fontWeight: 500,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 12l-4.5-4.5 1.06-1.06L7 8.88V2h2v6.88l2.44-2.44 1.06 1.06L8 12zM2 14h12v-2H2v2z"/>
+                  </svg>
+                  Pine (daily signals)
+                </a>
+                <a
+                  href="/api/export/pine_mtf"
+                  download="julius_rsibb_mtf_strategy.pine"
+                  title="Download MTF RSI + BB strategy — 4H signal, 1H confirmation, runs on 15m/1H chart"
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                    padding: '4px 10px', borderRadius: 6, fontSize: 12,
+                    background: 'var(--accent-soft, #e8f3ec)', border: '1px solid var(--accent)',
+                    color: 'var(--accent)', textDecoration: 'none', fontWeight: 500,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 12l-4.5-4.5 1.06-1.06L7 8.88V2h2v6.88l2.44-2.44 1.06 1.06L8 12zM2 14h12v-2H2v2z"/>
+                  </svg>
+                  Pine (4H MTF strategy)
+                </a>
+              </>
+            )}
+          </div>
         </div>
         <div className="card-body flush">
           <table className="tbl">
