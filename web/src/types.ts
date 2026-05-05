@@ -36,6 +36,7 @@ export interface BacktestResponse {
   price_data: Record<string, { series: number[]; dates: string[] }>
   lstm_by_ticker: Record<string, LstmData>
   regime_labels: string[]
+  regime_dates: string[]
 }
 
 // ── Live data ─────────────────────────────────────────────────────────────────

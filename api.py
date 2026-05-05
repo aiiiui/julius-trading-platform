@@ -268,6 +268,7 @@ def run_backtest_endpoint(req: BacktestReq):
             "price_data":     _serialize_prices(results),
             "lstm_by_ticker": _serialize_lstm(_cache["lstm_by_ticker"]),
             "regime_labels":  regime.tolist(),
+            "regime_dates":   [str(d)[:10] for d in regime.index],
         }
     finally:
         _bt_progress["running"] = False
@@ -286,6 +287,24 @@ def regime_table(ticker: str):
         return df.reset_index().to_dict("records")
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+
+@app.get("/api/regime_analysis_all")
+def regime_analysis_all():
+    if _cache["batch_results"] is None:
+        raise HTTPException(404, "No backtest in cache. Run /api/run_backtest first.")
+    rl = _cache["regime_labels"]
+    all_data: dict = {}
+    for ticker, ticker_results in _cache["batch_results"].items():
+        if ticker == "PAIRS" or not ticker_results:
+            continue
+        try:
+            df = build_regime_table(ticker_results, rl)
+            all_data[ticker] = df.reset_index().to_dict("records")
+        except Exception:
+            pass
+    return all_data
 
 
 # ── Live market data ──────────────────────────────────────────────────────────

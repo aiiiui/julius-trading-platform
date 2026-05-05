@@ -329,7 +329,7 @@ export default function App() {
           {!running && tab === 'overview'   && btData && <TabPortfolio  data={btData} spark={spark} changes={changes} theme={tweaks.theme}/>}
           {!running && tab === 'comparison' && btData && <TabComparison data={btData} theme={tweaks.theme}/>}
           {!running && tab === 'ai'         && btData && <TabAI         data={btData}/>}
-          {!running && tab === 'regime'     && btData && <TabRegime     data={btData} theme={tweaks.theme}/>}
+          {!running && tab === 'regime'     && btData && <TabRegime     data={btData}/>}
         </div>
       </main>
 
