@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import { fmt, stratColor } from '../components/ui'
+import { STOCK_DB } from '../lib/stockMeta'
 import type { BacktestResponse, StrategyResult } from '../types'
 
 // ── Strategy logic reference data ────────────────────────────────────────────
@@ -321,6 +322,303 @@ function StrategyLogicCard({ name, avgReturn, def }: { name: string; avgReturn: 
   )
 }
 
+// ── Overall strategy line chart ───────────────────────────────────────────────
+
+const OW = 860, OH = 270, OP = { l: 56, r: 16, t: 16, b: 32 }
+const oiW = OW - OP.l - OP.r
+const oiH = OH - OP.t - OP.b
+
+function OverallLineChart({
+  tickers, perTicker, allStrats,
+}: {
+  tickers: string[]
+  perTicker: Record<string, Record<string, StrategyResult>>
+  allStrats: string[]
+}) {
+  const aggSeries = useMemo(() => {
+    return allStrats.map(strat => {
+      const normalized: number[][] = []
+      let dates: string[] = []
+      for (const ticker of tickers) {
+        const result = perTicker[ticker]?.[strat]
+        if (!result?.value_series?.length) continue
+        const vs = result.value_series
+        const start = vs[0]
+        if (!start) continue
+        normalized.push(vs.map(v => (v / start) * 100))
+        if (!dates.length) dates = (result as StrategyResult & { value_dates?: string[] }).value_dates ?? []
+      }
+      if (!normalized.length) return null
+      const minLen = Math.min(...normalized.map(s => s.length))
+      const values = Array.from({ length: minLen }, (_, i) => {
+        const vals = normalized.map(s => s[i]).filter(v => !isNaN(v))
+        return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 100
+      })
+      const finalVal = values[values.length - 1] ?? 100
+      return { name: strat, values, dates: dates.slice(0, minLen), ret: (finalVal - 100) / 100 }
+    }).filter((s): s is NonNullable<typeof s> => s !== null && s.values.length > 1)
+  }, [allStrats, tickers, perTicker])
+
+  if (!aggSeries.length) return null
+
+  const allVals = aggSeries.flatMap(s => s.values)
+  const minV = Math.min(...allVals) * 0.995
+  const maxV = Math.max(...allVals) * 1.005
+  const vRange = maxV - minV || 1
+  const maxLen = Math.max(...aggSeries.map(s => s.values.length))
+  const xOf = (i: number) => OP.l + (i / (maxLen - 1)) * oiW
+  const yOf = (v: number) => OP.t + oiH - ((v - minV) / vRange) * oiH
+
+  const yTicks = Array.from({ length: 5 }, (_, i) => ({
+    v: minV + vRange * i / 4,
+    y: OP.t + oiH - (i / 4) * oiH,
+  }))
+
+  const dates0 = aggSeries[0].dates
+  const xTicks = [0, 0.25, 0.5, 0.75, 1].map(frac => {
+    const idx = Math.floor(frac * (dates0.length - 1))
+    return { label: dates0[idx]?.slice(0, 7) ?? '', x: xOf(idx) }
+  })
+
+  const sortedByRet = [...aggSeries].sort((a, b) => b.ret - a.ret)
+
+  return (
+    <div className="card" style={{ marginBottom: 24 }}>
+      <div className="card-header">
+        <div>
+          <h3 className="card-title">Overall strategy performance — {tickers.length} stocks averaged</h3>
+          <p className="card-subtitle">Normalized portfolio value (start = 100) · average across all backtested tickers · best strategy wins on final value</p>
+        </div>
+        <span className="tag" style={{ background: `${stratColor(allStrats.indexOf(sortedByRet[0]?.name ?? ''))}20`, color: stratColor(allStrats.indexOf(sortedByRet[0]?.name ?? '')) }}>
+          Best: {sortedByRet[0]?.name} {fmt.pct(sortedByRet[0]?.ret)}
+        </span>
+      </div>
+      <div style={{ padding: '8px 20px 16px' }}>
+        <svg viewBox={`0 0 ${OW} ${OH}`} style={{ width: '100%', display: 'block' }}>
+          {/* Grid */}
+          {yTicks.map((t, i) => (
+            <g key={i}>
+              <line x1={OP.l} x2={OW - OP.r} y1={t.y} y2={t.y}
+                stroke="var(--border)" strokeWidth={0.5} strokeDasharray="3 5"/>
+              <text x={OP.l - 6} y={t.y + 4} fontSize={9.5} fill="var(--text-subtle)"
+                textAnchor="end" fontFamily="var(--mono)">{t.v.toFixed(0)}</text>
+            </g>
+          ))}
+          {/* Baseline 100 */}
+          {(() => { const y = yOf(100); return <line x1={OP.l} x2={OW - OP.r} y1={y} y2={y} stroke="var(--text-subtle)" strokeWidth={0.8} strokeDasharray="6 4" opacity={0.4}/> })()}
+          {/* X-axis labels */}
+          {xTicks.map((t, i) => (
+            <text key={i} x={t.x} y={OH - 8} fontSize={9} fill="var(--text-subtle)"
+              textAnchor="middle" fontFamily="var(--mono)">{t.label}</text>
+          ))}
+          {/* Strategy lines */}
+          {aggSeries.map((s, si) => {
+            const ci = allStrats.indexOf(s.name)
+            const path = s.values.map((v, i) =>
+              `${i === 0 ? 'M' : 'L'}${xOf(i).toFixed(1)} ${yOf(v).toFixed(1)}`
+            ).join(' ')
+            return (
+              <g key={s.name}>
+                <path d={path} fill="none" stroke={stratColor(ci)} strokeWidth={si === 0 ? 2.5 : 1.8}
+                  strokeLinecap="round" strokeLinejoin="round" opacity={0.9}/>
+                {/* End label */}
+                <text
+                  x={xOf(s.values.length - 1) + 5}
+                  y={yOf(s.values[s.values.length - 1]) + 4}
+                  fontSize={9} fill={stratColor(ci)} fontFamily="var(--mono)" fontWeight="600">
+                  {fmt.pct(s.ret)}
+                </text>
+              </g>
+            )
+          })}
+        </svg>
+
+        {/* Legend */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 8, paddingLeft: OP.l }}>
+          {sortedByRet.map(s => {
+            const ci = allStrats.indexOf(s.name)
+            return (
+              <div key={s.name} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                <span style={{ width: 20, height: 3, background: stratColor(ci), borderRadius: 2, display: 'inline-block' }}/>
+                <span style={{ color: 'var(--text-muted)' }}>{s.name}</span>
+                <span style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: s.ret >= 0 ? 'var(--up)' : 'var(--down)' }}>
+                  {fmt.pct(s.ret)}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Sector performance overview ───────────────────────────────────────────────
+
+function heatBg(val: number | null): string {
+  if (val == null) return 'transparent'
+  const c = Math.max(-0.5, Math.min(0.5, val))
+  if (c >= 0) { const g = Math.round(34 + c / 0.5 * 163); return `rgba(22,${g},59,0.8)` }
+  const r = Math.round(200 + Math.abs(c) / 0.5 * 55); return `rgba(${r},30,30,0.8)`
+}
+
+function SectorOverview({
+  tickers, perTicker, allStrats,
+}: {
+  tickers: string[]
+  perTicker: Record<string, Record<string, StrategyResult>>
+  allStrats: string[]
+}) {
+  const sectorData = useMemo(() => {
+    const map = new Map<string, string[]>()
+    for (const ticker of tickers) {
+      const sector = STOCK_DB[ticker]?.sector ?? 'Other'
+      const arr = map.get(sector) ?? []
+      arr.push(ticker)
+      map.set(sector, arr)
+    }
+    return Array.from(map.entries())
+      .sort((a, b) => b[1].length - a[1].length)
+      .map(([sector, secTickers]) => {
+        const stratReturns: Record<string, number | null> = {}
+        for (const strat of allStrats) {
+          const vals = secTickers
+            .map(t => perTicker[t]?.[strat]?.metrics.total_return)
+            .filter((v): v is number => v != null)
+          stratReturns[strat] = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null
+        }
+        const best = allStrats.reduce((b, s) =>
+          (stratReturns[s] ?? -Infinity) > (stratReturns[b] ?? -Infinity) ? s : b,
+          allStrats[0] ?? ''
+        )
+        const worst = allStrats.reduce((b, s) =>
+          (stratReturns[s] ?? Infinity) < (stratReturns[b] ?? Infinity) ? s : b,
+          allStrats[0] ?? ''
+        )
+        return { sector, tickers: secTickers, stratReturns, best, worst }
+      })
+  }, [tickers, allStrats, perTicker])
+
+  if (!sectorData.length) return null
+
+  const SECTOR_ICONS: Record<string, string> = {
+    Technology: '💻', Financials: '🏦', Energy: '⚡', Healthcare: '🏥',
+    Consumer: '🛒', Industrials: '🏭', Materials: '⚗️', 'Real Estate': '🏢',
+    Utilities: '🔌', Other: '📦',
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: 24 }}>
+      <div className="card-header">
+        <div>
+          <h3 className="card-title">Strategy performance by sector</h3>
+          <p className="card-subtitle">Average return per strategy across tickers in each sector. Color = magnitude. Best strategy highlighted.</p>
+        </div>
+        <span className="tag">{sectorData.length} sectors</span>
+      </div>
+      <div className="card-body flush">
+        <div style={{ overflowX: 'auto' }}>
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>Sector</th>
+                <th style={{ fontSize: 10, color: 'var(--text-subtle)', fontWeight: 500 }}>Tickers</th>
+                {allStrats.map((s, i) => (
+                  <th key={s} className="right">
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+                      <span style={{ width: 7, height: 7, borderRadius: 1, background: stratColor(i), flexShrink: 0 }}/>
+                      {s.length > 14 ? s.slice(0, 12) + '…' : s}
+                    </span>
+                  </th>
+                ))}
+                <th className="right">Best</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sectorData.map(({ sector, tickers: st, stratReturns, best }) => (
+                <tr key={sector}>
+                  <td>
+                    <span style={{ fontSize: 14, marginRight: 6 }}>{SECTOR_ICONS[sector] ?? '📦'}</span>
+                    <span style={{ fontWeight: 600 }}>{sector}</span>
+                  </td>
+                  <td style={{ fontSize: 11, color: 'var(--text-muted)', maxWidth: 160 }}>
+                    {st.slice(0, 6).join(', ')}{st.length > 6 ? ` +${st.length - 6}` : ''}
+                  </td>
+                  {allStrats.map(s => {
+                    const v = stratReturns[s]
+                    const isBest = s === best && v != null
+                    return (
+                      <td key={s} className="num" style={{
+                        background: heatBg(v),
+                        color: v == null ? 'var(--text-subtle)' : v >= 0 ? 'var(--up)' : 'var(--down)',
+                        fontWeight: isBest ? 700 : 400,
+                        outline: isBest ? `1px solid ${stratColor(allStrats.indexOf(s))}40` : undefined,
+                      }}>
+                        {v != null ? fmt.pct(v) : '—'}
+                      </td>
+                    )
+                  })}
+                  <td>
+                    <span style={{
+                      fontSize: 11, padding: '2px 7px', borderRadius: 4,
+                      background: `${stratColor(allStrats.indexOf(best))}20`,
+                      color: stratColor(allStrats.indexOf(best)), fontWeight: 600,
+                    }}>
+                      {best.length > 12 ? best.slice(0, 10) + '…' : best}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Mini bar chart per sector */}
+        <div style={{ padding: '16px 20px 8px', borderTop: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+            Avg return by sector · bar chart
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
+            {sectorData.map(({ sector, stratReturns }) => {
+              const vals = allStrats.map(s => stratReturns[s] ?? null)
+              const maxAbs = Math.max(...vals.map(v => Math.abs(v ?? 0)), 0.01)
+              return (
+                <div key={sector} style={{ padding: '10px 12px', background: 'var(--bg-subtle)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>
+                    {SECTOR_ICONS[sector] ?? '📦'} {sector}
+                  </div>
+                  {allStrats.map((s, si) => {
+                    const v = stratReturns[s]
+                    if (v == null) return null
+                    const barW = Math.abs(v) / maxAbs * 100
+                    return (
+                      <div key={s} style={{ marginBottom: 5 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>
+                          <span>{s.length > 20 ? s.slice(0, 18) + '…' : s}</span>
+                          <span style={{ fontFamily: 'var(--mono)', color: v >= 0 ? 'var(--up)' : 'var(--down)', fontWeight: 600 }}>
+                            {fmt.pct(v)}
+                          </span>
+                        </div>
+                        <div style={{ height: 5, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
+                          <div style={{
+                            height: '100%', width: `${barW}%`,
+                            background: stratColor(si),
+                            borderRadius: 3, opacity: 0.85,
+                          }}/>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Per-ticker card ───────────────────────────────────────────────────────────
 
 function TickerCard({
@@ -577,6 +875,12 @@ export default function TabComparison({ data, theme: _theme = 'light' }: {
           </table>
         </div>
       </div>
+
+      {/* Overall strategy line chart */}
+      <OverallLineChart tickers={tickers} perTicker={perTicker} allStrats={allStrats}/>
+
+      {/* Sector performance overview */}
+      <SectorOverview tickers={tickers} perTicker={perTicker} allStrats={allStrats}/>
 
       {/* Per-ticker charts */}
       {tickers.map(ticker => (
