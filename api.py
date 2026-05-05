@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import asyncio
 import math
+import time as _time
 from datetime import date, timedelta
 from typing import Optional
 from pathlib import Path as _Path
@@ -50,6 +51,15 @@ _cache: dict = {
     "batch_results": None,
     "lstm_by_ticker": {},
     "regime_labels": None,
+}
+
+_bt_progress: dict = {
+    "running": False,
+    "pct": 0.0,
+    "step": 0,
+    "total": 0,
+    "msg": "",
+    "started_at": None,
 }
 
 
@@ -193,27 +203,57 @@ def search_tickers(q: str = Query("", min_length=1)):
 
 # ── Backtest ──────────────────────────────────────────────────────────────────
 
+@app.get("/api/backtest_progress")
+def backtest_progress_endpoint():
+    p = dict(_bt_progress)
+    started = p.pop("started_at", None)
+    pct = p.get("pct", 0)
+    if p.get("running") and pct > 2 and started:
+        elapsed = _time.time() - started
+        total_est = elapsed / (pct / 100)
+        p["eta_sec"] = max(0, round(total_est - elapsed))
+    else:
+        p["eta_sec"] = None
+    return p
+
+
 @app.post("/api/run_backtest")
 def run_backtest_endpoint(req: BacktestReq):
-    strats = build_strategies(req.strategies)
-    results, meta = run_all_stocks(
-        strategies=strats,
-        use_pairs=req.use_pairs,
-        tickers=req.tickers,
-        start=req.start,
-        end=req.end,
-        initial_cash=req.initial_cash,
-        tc_pct=req.tc_pct,
-    )
-    regime = get_regime_labels(req.start, req.end)
-    _cache["batch_results"]  = results
-    _cache["lstm_by_ticker"] = meta.get("lstm_by_ticker", {})
-    _cache["regime_labels"]  = regime
-    return {
-        "batch_results":  _serialize_results(results),
-        "lstm_by_ticker": _serialize_lstm(_cache["lstm_by_ticker"]),
-        "regime_labels":  regime.tolist(),
-    }
+    _bt_progress.update({
+        "running": True, "pct": 0.0, "step": 0, "total": 0,
+        "msg": "Initializing…", "started_at": _time.time(),
+    })
+
+    def _progress(step: int, total: int, msg: str) -> None:
+        _bt_progress["step"] = step
+        _bt_progress["total"] = total
+        _bt_progress["msg"] = msg
+        _bt_progress["pct"] = round((step / total) * 100, 1) if total else 0
+
+    try:
+        strats = build_strategies(req.strategies)
+        results, meta = run_all_stocks(
+            strategies=strats,
+            use_pairs=req.use_pairs,
+            tickers=req.tickers,
+            start=req.start,
+            end=req.end,
+            initial_cash=req.initial_cash,
+            tc_pct=req.tc_pct,
+            progress_callback=_progress,
+        )
+        _bt_progress.update({"pct": 100, "msg": "Complete"})
+        regime = get_regime_labels(req.start, req.end)
+        _cache["batch_results"]  = results
+        _cache["lstm_by_ticker"] = meta.get("lstm_by_ticker", {})
+        _cache["regime_labels"]  = regime
+        return {
+            "batch_results":  _serialize_results(results),
+            "lstm_by_ticker": _serialize_lstm(_cache["lstm_by_ticker"]),
+            "regime_labels":  regime.tolist(),
+        }
+    finally:
+        _bt_progress["running"] = False
 
 
 @app.get("/api/regime_table/{ticker}")

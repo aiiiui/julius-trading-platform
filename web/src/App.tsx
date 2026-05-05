@@ -8,6 +8,8 @@ import TabRegime    from './tabs/TabRegime'
 import TabAgents    from './tabs/TabAgents'
 import { runBacktest, fetchLivePrices, fetchStrategies } from './api'
 import TickerTagInput from './components/TickerTagInput'
+import IntroScreen from './components/IntroScreen'
+import BacktestProgress from './components/BacktestProgress'
 import type { BacktestResponse, RunSettings, Tweaks } from './types'
 
 const TABS = [
@@ -53,6 +55,9 @@ export default function App() {
   const [tab, setTab]         = useState<TabId>('live')
   const [tweaks, _setTweaks]  = useState<Tweaks>(loadTweaks)
   const { push, node: toastNode } = useToasts()
+
+  // Intro screen — show once per session
+  const [showIntro, setShowIntro] = useState(() => !sessionStorage.getItem('julius-intro-shown'))
 
   // Backtest state
   const [btData,    setBtData]    = useState<BacktestResponse | null>(null)
@@ -122,7 +127,7 @@ export default function App() {
       const result = await runBacktest(settings)
       setBtData(result)
       push({ kind: 'success', msg: `Backtest complete — ${settings.tickers.length} stocks × ${settings.strategies.length} strategies` })
-      if (tab === 'live') setTab('overview')
+      setTab('overview')
     } catch (e: unknown) {
       push({ kind: 'error', msg: 'Backtest failed: ' + String(e) })
     } finally {
@@ -135,6 +140,12 @@ export default function App() {
 
   return (
     <div className="app">
+      {showIntro && (
+        <IntroScreen onDone={() => {
+          sessionStorage.setItem('julius-intro-shown', '1')
+          setShowIntro(false)
+        }} />
+      )}
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="brand">
@@ -205,8 +216,13 @@ export default function App() {
         </header>
 
         <div className="content">
+          {/* Backtest progress overlay — replaces all content while running */}
+          {running && (
+            <BacktestProgress tickers={settings.tickers} strategies={settings.strategies} />
+          )}
+
           {/* Run configuration panel */}
-          {showConfig && (
+          {!running && showConfig && (
             <div className="card" style={{ marginBottom: 24, boxShadow: 'var(--shadow-md)' }}>
               <div className="card-header">
                 <h3 className="card-title">Run configuration</h3>
@@ -294,11 +310,11 @@ export default function App() {
             </div>
           )}
 
-          {/* Tab content */}
-          {tab === 'live'   && <TabLive   pushToast={push} theme={tweaks.theme}/>}
-          {tab === 'agents' && <TabAgents pushToast={push}/>}
+          {/* Tab content — hidden while running */}
+          {!running && tab === 'live'   && <TabLive   pushToast={push} theme={tweaks.theme}/>}
+          {!running && tab === 'agents' && <TabAgents pushToast={push}/>}
 
-          {tab !== 'live' && tab !== 'agents' && !btData && (
+          {!running && tab !== 'live' && tab !== 'agents' && !btData && (
             <div style={{ display: 'grid', placeItems: 'center', minHeight: 400 }}>
               <div style={{ textAlign: 'center', maxWidth: 440 }}>
                 <div style={{ fontFamily: 'var(--serif)', fontStyle: 'italic', fontSize: 32, marginBottom: 12 }}>No backtest data</div>
@@ -310,10 +326,10 @@ export default function App() {
             </div>
           )}
 
-          {tab === 'overview'   && btData && <TabPortfolio  data={btData} spark={spark} changes={changes} theme={tweaks.theme}/>}
-          {tab === 'comparison' && btData && <TabComparison data={btData} theme={tweaks.theme}/>}
-          {tab === 'ai'         && btData && <TabAI         data={btData}/>}
-          {tab === 'regime'     && btData && <TabRegime     data={btData} theme={tweaks.theme}/>}
+          {!running && tab === 'overview'   && btData && <TabPortfolio  data={btData} spark={spark} changes={changes} theme={tweaks.theme}/>}
+          {!running && tab === 'comparison' && btData && <TabComparison data={btData} theme={tweaks.theme}/>}
+          {!running && tab === 'ai'         && btData && <TabAI         data={btData}/>}
+          {!running && tab === 'regime'     && btData && <TabRegime     data={btData} theme={tweaks.theme}/>}
         </div>
       </main>
 
