@@ -38,15 +38,9 @@ import requests as _requests
 
 app = FastAPI(title="Julius Trading Platform", version="1.0.0")
 
-_cors_origins = os.environ.get(
-    "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:4173,http://localhost:3000"
-).split(",")
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_credentials=True,
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
