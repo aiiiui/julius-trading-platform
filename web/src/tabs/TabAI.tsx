@@ -25,143 +25,105 @@ function computeEMA(closes: number[], period: number): number {
   return ema
 }
 
-const FEATURE_WEIGHTS: Record<string, { label: string; weight: number; color: string }[]> = {
-  'EMA Crossover + Volume': [
-    { label: 'Price action (EMA stack)',   weight: 40, color: 'var(--accent)' },
-    { label: 'Trend confirmation (EMAs)',  weight: 35, color: '#7cb8ff' },
-    { label: 'Volume anomaly',             weight: 25, color: 'var(--warn)' },
-  ],
-  'RSI + Bollinger Bands': [
-    { label: 'Momentum (RSI)',             weight: 40, color: '#7cb8ff' },
-    { label: 'Volatility bands (BB)',      weight: 35, color: 'var(--accent)' },
-    { label: 'Price position',             weight: 25, color: 'var(--warn)' },
-  ],
-  'MACD + ADX': [
-    { label: 'MACD momentum',             weight: 45, color: '#7cb8ff' },
-    { label: 'Trend strength (ADX)',       weight: 35, color: 'var(--accent)' },
-    { label: 'Price action',              weight: 20, color: 'var(--warn)' },
-  ],
-  'Buy & Hold': [
-    { label: 'Price return',              weight: 100, color: 'var(--accent)' },
-  ],
-  'ML Signal': [
-    { label: 'EMA features (5 periods)',  weight: 35, color: 'var(--accent)' },
-    { label: 'Momentum (RSI/MACD/BB)',    weight: 40, color: '#7cb8ff' },
-    { label: 'Volume & price change',     weight: 25, color: 'var(--warn)' },
-  ],
-  'LSTM Multi-Signal': [
-    { label: 'Temporal sequence (20d)',   weight: 38, color: 'var(--accent)' },
-    { label: 'Momentum indicators',       weight: 32, color: '#7cb8ff' },
-    { label: 'ROC & StochRSI',            weight: 30, color: 'var(--warn)' },
-  ],
+function computeMACD(closes: number[]): number {
+  if (closes.length < 26) return 0
+  return computeEMA(closes, 12) - computeEMA(closes, 26)
 }
-const DEFAULT_FEATURES = [
-  { label: 'Price action',  weight: 40, color: 'var(--accent)' },
-  { label: 'Momentum',      weight: 35, color: '#7cb8ff' },
-  { label: 'Volume',        weight: 25, color: 'var(--warn)' },
+
+// ── XAI dark-terminal design constants ───────────────────────────────────────
+
+const D = {
+  bg:      '#0d110e',
+  panel:   '#111814',
+  border:  '#1d2620',
+  text:    '#d4e0d6',
+  muted:   '#5a7060',
+  blue:    '#4A90E2',
+  purple:  '#7B4FE8',
+  green:   '#c5d934',
+  active:  '#3A7DDE',
+}
+
+const PIPELINE_NODES = [
+  { id: 'ingestion', label: 'Ingestion',  icon: (
+    <svg width={18} height={18} viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <rect x={2} y={2} width={6} height={6} rx={1}/><rect x={10} y={2} width={6} height={6} rx={1}/>
+      <rect x={2} y={10} width={6} height={6} rx={1}/><rect x={10} y={10} width={6} height={6} rx={1}/>
+    </svg>
+  )},
+  { id: 'features',  label: 'Features',   icon: (
+    <svg width={18} height={18} viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M2 3h14l-5 6v5l-4-2V9L2 3z"/>
+    </svg>
+  )},
+  { id: 'patterns',  label: 'Patterns',   icon: (
+    <svg width={18} height={18} viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M2 12 Q5 4 8 9 Q11 14 14 6 L16 6" strokeLinecap="round"/>
+    </svg>
+  )},
+  { id: 'context',   label: 'Context',    icon: (
+    <svg width={18} height={18} viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <circle cx={9} cy={9} r={2}/><path d="M4 9a5 5 0 0 1 5-5"/><path d="M14 9a5 5 0 0 1-5 5"/>
+      <path d="M1 9a8 8 0 0 1 8-8"/><path d="M17 9a8 8 0 0 1-8 8"/>
+    </svg>
+  )},
+  { id: 'scoring',   label: 'Scoring',    icon: (
+    <svg width={18} height={18} viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <rect x={2} y={4} width={14} height={10} rx={2}/>
+      <path d="M6 12 L6 9 M9 12 L9 7 M12 12 L12 10"/>
+    </svg>
+  )},
+  { id: 'output',    label: 'Output',     icon: (
+    <svg width={18} height={18} viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M9 2 L14 9 L11 9 L11 16 L7 16 L7 9 L4 9 Z"/>
+    </svg>
+  )},
 ]
 
-// ── XAI sub-components ────────────────────────────────────────────────────────
-
-function CircularGauge({ value, label }: { value: number; label: string }) {
-  const r = 36, circ = 2 * Math.PI * r
-  const offset = circ * (1 - Math.min(100, Math.max(0, value)) / 100)
-  const color = value >= 65 ? 'var(--up)' : value >= 40 ? 'var(--warn)' : 'var(--down)'
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-      <svg width={96} height={96} viewBox="0 0 96 96">
-        <circle cx={48} cy={48} r={r} fill="none" stroke="var(--bg-subtle)" strokeWidth={7}/>
-        <circle cx={48} cy={48} r={r} fill="none" stroke={color} strokeWidth={7}
-          strokeDasharray={`${circ}`} strokeDashoffset={offset}
-          strokeLinecap="round" transform="rotate(-90 48 48)"
-          style={{ transition: 'stroke-dashoffset 0.9s ease' }}/>
-        <text x={48} y={48} fontSize={17} fontWeight={700} fill={color}
-          textAnchor="middle" dominantBaseline="central" fontFamily="var(--mono)">
-          {value.toFixed(0)}%
-        </text>
-      </svg>
-      <span style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center' }}>{label}</span>
-    </div>
-  )
+const FEATURE_MAP: Record<string, { label: string; weight: number }[]> = {
+  'EMA Crossover + Volume': [
+    { label: 'EMA',    weight: 50 }, { label: 'VOLUME', weight: 20 },
+    { label: 'MACD',   weight: 20 }, { label: 'RSI',    weight: 10 },
+  ],
+  'RSI + Bollinger Bands': [
+    { label: 'RSI',    weight: 40 }, { label: 'MACD',   weight: 25 },
+    { label: 'EMA',    weight: 20 }, { label: 'VOLUME', weight: 15 },
+  ],
+  'MACD + ADX': [
+    { label: 'MACD',   weight: 45 }, { label: 'EMA',    weight: 35 },
+    { label: 'VOLUME', weight: 20 }, { label: 'RSI',    weight: 0  },
+  ],
+  'LSTM Multi-Signal': [
+    { label: 'EMA',    weight: 38 }, { label: 'RSI',    weight: 32 },
+    { label: 'MACD',   weight: 20 }, { label: 'VOLUME', weight: 10 },
+  ],
+  'ML Signal': [
+    { label: 'RSI',    weight: 40 }, { label: 'EMA',    weight: 35 },
+    { label: 'MACD',   weight: 15 }, { label: 'VOLUME', weight: 10 },
+  ],
 }
-
-function FeatureBar({ label, weight, color, active }: { label: string; weight: number; color: string; active: boolean }) {
-  return (
-    <div style={{ marginBottom: 10 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-        <span style={{ color: 'var(--text-muted)' }}>{label}</span>
-        <span style={{ fontFamily: 'var(--mono)', color, fontWeight: 600 }}>{weight}%</span>
-      </div>
-      <div style={{ height: 6, borderRadius: 99, background: 'var(--bg-subtle)' }}>
-        <div style={{
-          height: '100%', borderRadius: 99, background: color,
-          width: active ? `${weight}%` : '0%',
-          transition: 'width 0.7s cubic-bezier(0.4,0,0.2,1)',
-        }}/>
-      </div>
-    </div>
-  )
-}
-
-interface StepProps { active: boolean; done: boolean; n: number; title: string; tooltip: string; children: React.ReactNode; onClick: () => void }
-
-function XAIStep({ active, done, n, title, tooltip, children, onClick }: StepProps) {
-  return (
-    <div style={{
-      borderRadius: 10, border: `1px solid ${active ? 'var(--accent)' : done ? 'var(--border)' : 'var(--border)'}`,
-      background: active ? 'var(--bg-elevated)' : 'var(--bg)',
-      boxShadow: active ? 'var(--shadow-md)' : 'none',
-      transition: 'all 0.3s ease', overflow: 'hidden',
-    }}>
-      <button onClick={onClick} style={{
-        width: '100%', display: 'flex', alignItems: 'center', gap: 14,
-        padding: '14px 18px', background: 'none', border: 'none',
-        cursor: 'pointer', textAlign: 'left', color: 'var(--text)',
-      }}>
-        {/* Step number badge */}
-        <div style={{
-          width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: done ? 'var(--up-soft)' : active ? 'var(--accent)' : 'var(--bg-subtle)',
-          color: done ? 'var(--up)' : active ? '#fff' : 'var(--text-subtle)',
-          fontSize: 13, fontWeight: 700, fontFamily: 'var(--mono)',
-          transition: 'all 0.3s',
-        }}>
-          {done ? '✓' : n}
-        </div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 600, fontSize: 13 }}>{title}</div>
-          <div style={{ fontSize: 11, color: 'var(--text-subtle)', marginTop: 1 }}>{tooltip}</div>
-        </div>
-        <span style={{
-          fontSize: 11, color: 'var(--text-subtle)',
-          transform: active ? 'rotate(180deg)' : 'none',
-          transition: 'transform 0.2s', display: 'inline-block',
-        }}>▾</span>
-      </button>
-      {active && (
-        <div style={{ padding: '0 18px 18px', borderTop: '1px solid var(--border)' }}>
-          {children}
-        </div>
-      )}
-    </div>
-  )
-}
+const DEFAULT_FEAT = [
+  { label: 'EMA', weight: 50 }, { label: 'MACD', weight: 20 },
+  { label: 'RSI', weight: 10 }, { label: 'VOLUME', weight: 20 },
+]
 
 // ── XAI Stepper main component ────────────────────────────────────────────────
 
 function XAIStepper({ data, ticker }: { data: BacktestResponse; ticker: string }) {
-  const [activeStep, setActiveStep] = useState<number | null>(null)
+  const [activeNode, setActiveNode] = useState(3)   // 0-5
   const [playing,    setPlaying]    = useState(false)
+  const [modelType,  setModelType]  = useState<'LSTM' | 'RF'>('LSTM')
 
-  // Auto-play: step through 0→5 with delay
   useEffect(() => {
     if (!playing) return
-    if (activeStep === null) { setActiveStep(0); return }
-    if (activeStep >= 5) { setPlaying(false); return }
-    const t = setTimeout(() => setActiveStep(s => (s ?? 0) + 1), 1800)
+    const t = setTimeout(() => {
+      setActiveNode(n => {
+        if (n >= 5) { setPlaying(false); return n }
+        return n + 1
+      })
+    }, 1600)
     return () => clearTimeout(t)
-  }, [playing, activeStep])
+  }, [playing, activeNode])
 
   const prices    = data.price_data?.[ticker]?.series ?? []
   const bestStrat = useMemo(() => {
@@ -174,310 +136,300 @@ function XAIStepper({ data, ticker }: { data: BacktestResponse; ticker: string }
     return best
   }, [data, ticker])
 
-  const metrics     = data.batch_results[ticker]?.[bestStrat]?.metrics
-  const lstmData    = data.lstm_by_ticker?.[ticker]
-  const lastClose   = prices[prices.length - 1] ?? 0
-  const prevClose   = prices[prices.length - 2] ?? lastClose
-  const changePct   = lastClose && prevClose ? ((lastClose - prevClose) / prevClose) * 100 : 0
-  const rsi         = useMemo(() => computeRSI(prices), [prices])
-  const ema20       = useMemo(() => computeEMA(prices, 20), [prices])
-  const ema50       = useMemo(() => computeEMA(prices, 50), [prices])
-  const features    = FEATURE_WEIGHTS[bestStrat] ?? DEFAULT_FEATURES
+  const metrics   = data.batch_results[ticker]?.[bestStrat]?.metrics
+  const lstmData  = data.lstm_by_ticker?.[ticker]
 
-  // Regime stats
-  const regimeStats = useMemo(() => {
-    const labels = data.regime_labels ?? []
-    const calm     = labels.filter(l => l === 'calm').length
-    const volatile = labels.filter(l => l === 'volatile').length
-    const total    = labels.length || 1
-    const current  = labels[labels.length - 1] ?? 'calm'
-    return { calm, volatile, total, current, calmPct: Math.round(calm / total * 100), volPct: Math.round(volatile / total * 100) }
+  const lastClose  = prices[prices.length - 1] ?? 0
+  const prevClose  = prices[prices.length - 2] ?? lastClose
+  const changePct  = prevClose ? ((lastClose - prevClose) / prevClose) * 100 : 0
+  const rsi        = useMemo(() => computeRSI(prices), [prices])
+  const macd       = useMemo(() => computeMACD(prices), [prices])
+  const ema20      = useMemo(() => computeEMA(prices, 20), [prices])
+  const features   = (FEATURE_MAP[bestStrat] ?? DEFAULT_FEAT).filter(f => f.weight > 0)
+
+  const regime = useMemo(() => {
+    const labels  = data.regime_labels ?? []
+    const current = labels[labels.length - 1] ?? 'calm'
+    const volPct  = labels.length ? Math.round(labels.filter(l => l === 'volatile').length / labels.length * 100) : 0
+    return { current, volPct, label: current === 'volatile' ? 'High Volatility' : 'Trending' }
   }, [data.regime_labels])
 
-  // Confidence
   const confidence = useMemo(() => {
     if (lstmData?.confidence?.length) {
       const last20 = lstmData.confidence.slice(-20)
-      const avg = last20.reduce((a, b) => a + b, 0) / last20.length
-      return Math.round(avg * 100)
+      return Math.round(last20.reduce((a: number, b: number) => a + b, 0) / last20.length * 100)
     }
-    const wr    = metrics?.win_rate ?? 0.5
+    const wr     = metrics?.win_rate ?? 0.5
     const sharpe = Math.min(3, Math.max(0, metrics?.sharpe_ratio ?? 0))
     return Math.round(((wr + sharpe / 3) / 2) * 100)
   }, [lstmData, metrics])
 
-  // Signal derivation
   const signal = useMemo(() => {
     const ret = metrics?.total_return ?? 0
     const wr  = metrics?.win_rate ?? 0.5
-    if (ret > 0.05 && wr > 0.5)  return { label: 'BUY',  color: 'var(--up)',   bg: 'var(--up-soft)' }
-    if (ret < -0.05 || wr < 0.4) return { label: 'AVOID', color: 'var(--down)', bg: 'var(--down-soft)' }
-    return { label: 'HOLD', color: 'var(--warn)', bg: 'var(--warn-soft)' }
+    if (ret > 0.05 && wr > 0.5)  return { label: 'Buy',  hex: '#4ade80' }
+    if (ret < -0.05 || wr < 0.4) return { label: 'Sell', hex: '#f87171' }
+    return { label: 'Hold', hex: '#fbbf24' }
   }, [metrics])
 
-  const avgPerTrade   = metrics?.n_trades ? (metrics.total_return ?? 0) / (metrics.n_trades || 1) : 0
-  const targetPrice   = lastClose * (1 + Math.max(0, avgPerTrade))
-  const stopPrice     = lastClose * (1 + (metrics?.max_drawdown ?? -0.1) * 0.4)
+  const avgPerTrade = metrics?.n_trades ? (metrics.total_return ?? 0) / (metrics.n_trades || 1) : 0
+  const targetPrice = lastClose * (1 + Math.max(0, avgPerTrade))
+  const stopPrice   = lastClose * (1 + (metrics?.max_drawdown ?? -0.1) * 0.4)
 
-  const toggle = (i: number) => setActiveStep(s => s === i ? null : i)
-
-  const steps = [
-    {
-      title: 'Data Ingestion — Raw Input',
-      tooltip: 'Fetching current market state and technical indicators.',
-      content: (
-        <div style={{ marginTop: 14 }}>
-          <div style={{
-            fontFamily: 'var(--mono)', fontSize: 12, lineHeight: 2,
-            padding: '14px 16px', borderRadius: 8,
-            background: 'var(--bg-subtle)', border: '1px solid var(--border)',
-          }}>
-            <div style={{ color: 'var(--accent)', marginBottom: 4, fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-              ● LIVE FEED — {ticker}
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 32px' }}>
-              {[
-                ['Ticker',         ticker],
-                ['Last Close',     `$${lastClose.toFixed(2)}`],
-                ['Day Change',     `${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%`],
-                ['RSI (14)',       rsi.toFixed(1)],
-                ['EMA (20)',       `$${ema20.toFixed(2)}`],
-                ['EMA (50)',       `$${ema50.toFixed(2)}`],
-                ['Data points',   `${prices.length} days`],
-                ['Best strategy', bestStrat || '—'],
-              ].map(([k, v]) => (
-                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
-                  <span style={{ color: 'var(--text-subtle)' }}>{k}</span>
-                  <span style={{ color: 'var(--text)', fontWeight: 500 }}>{v}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      ),
-    },
-    {
-      title: 'Feature Engineering — Importance Weights',
-      tooltip: 'Normalising inputs and assigning importance based on current market dynamics.',
-      content: (
-        <div style={{ marginTop: 14 }}>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.6 }}>
-            Feature attribution for <strong>{bestStrat || 'active strategy'}</strong>. Weights reflect how much each signal group influences the final decision.
-          </div>
-          {features.map(f => (
-            <FeatureBar key={f.label} label={f.label} weight={f.weight} color={f.color} active={activeStep === 1} />
-          ))}
-        </div>
-      ),
-    },
-    {
-      title: 'Pattern Recognition — LSTM Core',
-      tooltip: 'Comparing current sequence against historical memory layers to predict trajectory.',
-      content: (
-        <div style={{ marginTop: 14 }}>
-          {lstmData ? (
-            <>
-              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.6 }}>
-                LSTM trained on 2020–2024 data. Confidence distribution shows how decisive the model is:
-                scores &lt;0.40 → SELL, &gt;0.60 → BUY.
-              </div>
-              <svg viewBox="0 0 400 160" style={{ width: '100%', display: 'block', borderRadius: 8 }}>
-                <rect x={0} y={0} width={160} height={140} fill="var(--down)" opacity={0.05}/>
-                <rect x={240} y={0} width={160} height={140} fill="var(--up)" opacity={0.05}/>
-                <line x1={160} x2={160} y1={0} y2={140} stroke="var(--down)" strokeDasharray="3 3" opacity={0.4}/>
-                <line x1={240} x2={240} y1={0} y2={140} stroke="var(--up)"   strokeDasharray="3 3" opacity={0.4}/>
-                {(() => {
-                  const h = new Array(20).fill(0)
-                  lstmData.confidence.forEach((c: number) => { h[Math.min(19, Math.floor(c * 20))]++ })
-                  const mx = Math.max(...h, 1)
-                  return h.map((cnt, i) => {
-                    const x = (i / 20) * 400, w = 18, ht = (cnt / mx) * 120
-                    const center = (i + 0.5) / 20
-                    return <rect key={i} x={x + 1} y={140 - ht} width={w} height={ht} rx={2}
-                      fill={center < 0.4 ? 'var(--down)' : center > 0.6 ? 'var(--up)' : 'var(--text-subtle)'}
-                      opacity={0.8}/>
-                  })
-                })()}
-                {[0, 0.25, 0.5, 0.75, 1].map(p => (
-                  <text key={p} x={p * 400} y={155} fontSize={9} fill="var(--text-muted)" textAnchor="middle" fontFamily="var(--mono)">{p.toFixed(2)}</text>
-                ))}
-                <text x={80}  y={13} fontSize={9} fill="var(--down)" textAnchor="middle" fontFamily="var(--mono)">SELL zone</text>
-                <text x={320} y={13} fontSize={9} fill="var(--up)"   textAnchor="middle" fontFamily="var(--mono)">BUY zone</text>
-              </svg>
-              <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                Model accuracy: {(lstmData.accuracy * 100).toFixed(1)}% · F1: {lstmData.f1.toFixed(3)} · n={lstmData.n} test samples
-              </div>
-            </>
-          ) : (
-            <div style={{
-              padding: '20px', textAlign: 'center', fontSize: 12, color: 'var(--text-muted)',
-              background: 'var(--bg-subtle)', borderRadius: 8, lineHeight: 1.7,
-            }}>
-              LSTM not trained for <strong>{ticker}</strong>.<br/>
-              Enable "LSTM Multi-Signal" in run configuration and re-run the backtest to see pattern recognition data.
-            </div>
-          )}
-        </div>
-      ),
-    },
-    {
-      title: 'Market Regime Context — Environment',
-      tooltip: 'Adjusting sensitivity parameters to account for broader market swings.',
-      content: (
-        <div style={{ marginTop: 14 }}>
-          <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-            {/* Current regime badge */}
-            <div style={{
-              flex: 1, minWidth: 180,
-              padding: '16px 20px', borderRadius: 10, textAlign: 'center',
-              background: regimeStats.current === 'volatile' ? 'var(--down-soft)' : 'var(--up-soft)',
-              border: `1px solid ${regimeStats.current === 'volatile' ? 'rgba(192,56,59,0.3)' : 'rgba(10,138,62,0.3)'}`,
-            }}>
-              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-subtle)', marginBottom: 8 }}>
-                Current regime
-              </div>
-              <div style={{
-                fontSize: 20, fontWeight: 700, fontFamily: 'var(--mono)',
-                color: regimeStats.current === 'volatile' ? 'var(--down)' : 'var(--up)',
-              }}>
-                {regimeStats.current.toUpperCase()}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-                {regimeStats.current === 'volatile'
-                  ? 'High VIX — mean-reversion strategies favoured'
-                  : 'Low VIX — trend-following strategies favoured'}
-              </div>
-            </div>
-            {/* Breakdown */}
-            <div style={{ flex: 1, minWidth: 180 }}>
-              <div style={{ fontSize: 11, color: 'var(--text-subtle)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                Period breakdown
-              </div>
-              {[
-                { label: 'Calm (low VIX)',     pct: regimeStats.calmPct,  days: regimeStats.calm,     color: 'var(--up)' },
-                { label: 'Volatile (high VIX)', pct: regimeStats.volPct, days: regimeStats.volatile, color: 'var(--down)' },
-              ].map(r => (
-                <div key={r.label} style={{ marginBottom: 10 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
-                    <span style={{ color: 'var(--text-muted)' }}>{r.label}</span>
-                    <span style={{ fontFamily: 'var(--mono)', color: r.color }}>{r.pct}% ({r.days}d)</span>
-                  </div>
-                  <div style={{ height: 5, borderRadius: 99, background: 'var(--bg-subtle)' }}>
-                    <div style={{ height: '100%', borderRadius: 99, background: r.color, width: `${r.pct}%`, transition: 'width 0.6s ease' }}/>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      ),
-    },
-    {
-      title: 'Confidence Scoring — Probability',
-      tooltip: 'Statistical probability of the predicted move synthesised from model outputs.',
-      content: (
-        <div style={{ marginTop: 14, display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap' }}>
-          <CircularGauge value={confidence} label="Model confidence" />
-          <div style={{ flex: 1, minWidth: 200 }}>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.8, marginBottom: 14 }}>
-              {lstmData
-                ? `Derived from the last 20 LSTM predictions (avg probability: ${(confidence / 100).toFixed(2)}).`
-                : `Derived from strategy win rate (${fmt.pctSimple(metrics?.win_rate)}) and Sharpe ratio (${metrics?.sharpe_ratio?.toFixed(2) ?? '—'}).`}
-            </div>
-            {[
-              { range: '≥ 65%', label: 'High confidence',   color: 'var(--up)',   bg: 'var(--up-soft)' },
-              { range: '40–65%', label: 'Moderate confidence', color: 'var(--warn)', bg: 'var(--warn-soft)' },
-              { range: '< 40%', label: 'Low confidence',    color: 'var(--down)', bg: 'var(--down-soft)' },
-            ].map(r => (
-              <div key={r.range} style={{
-                display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6,
-                padding: '5px 10px', borderRadius: 6, background: r.bg,
-                opacity: (r.range === '≥ 65%' && confidence >= 65) ||
-                         (r.range === '40–65%' && confidence >= 40 && confidence < 65) ||
-                         (r.range === '< 40%'  && confidence < 40) ? 1 : 0.3,
-              }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: r.color, minWidth: 50 }}>{r.range}</span>
-                <span style={{ fontSize: 12, color: r.color }}>{r.label}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ),
-    },
-    {
-      title: 'Final Output — Actionable Signal',
-      tooltip: 'Definitive recommendation with risk management parameters from backtest analysis.',
-      content: (
-        <div style={{ marginTop: 14 }}>
-          <div style={{
-            padding: '20px 24px', borderRadius: 10,
-            background: signal.bg, border: `1px solid ${signal.color}40`,
-            marginBottom: 16,
-          }}>
-            <div style={{ fontSize: 11, color: 'var(--text-subtle)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 10 }}>
-              Signal recommendation
-            </div>
-            <div style={{ fontSize: 36, fontWeight: 800, fontFamily: 'var(--mono)', color: signal.color, marginBottom: 6 }}>
-              {signal.label}
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-              Based on {bestStrat} — {fmt.pct(metrics?.total_return)} return, {fmt.pctSimple(metrics?.win_rate)} win rate
-            </div>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-            {[
-              { label: 'Entry (last close)', value: `$${lastClose.toFixed(2)}`,   color: 'var(--text)' },
-              { label: 'Target (avg/trade)', value: avgPerTrade > 0 ? `$${targetPrice.toFixed(2)}` : '—', color: 'var(--up)' },
-              { label: 'Stop loss (est.)',   value: `$${stopPrice.toFixed(2)}`,    color: 'var(--down)' },
-            ].map(r => (
-              <div key={r.label} style={{
-                padding: '14px 16px', borderRadius: 8, textAlign: 'center',
-                background: 'var(--bg-subtle)', border: '1px solid var(--border)',
-              }}>
-                <div style={{ fontSize: 10, color: 'var(--text-subtle)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
-                  {r.label}
-                </div>
-                <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'var(--mono)', color: r.color }}>
-                  {r.value}
-                </div>
-              </div>
-            ))}
-          </div>
-          <div style={{ marginTop: 12, fontSize: 11, color: 'var(--text-subtle)', fontStyle: 'italic', lineHeight: 1.6 }}>
-            ⚠ Research purposes only. Not financial advice. Always apply your own risk management.
-          </div>
-        </div>
-      ),
-    },
-  ]
+  // Confidence arc geometry
+  const R = 52, cx = 70, cy = 70
+  const circ    = 2 * Math.PI * R
+  const startAngle = -220 * Math.PI / 180
+  const arcSpan    = 260 * Math.PI / 180
+  const filled     = (confidence / 100) * arcSpan
+  const toXY = (a: number) => ({
+    x: cx + R * Math.cos(a),
+    y: cy + R * Math.sin(a),
+  })
+  const arcPath = (from: number, span: number) => {
+    const s = toXY(from), e = toXY(from + span)
+    return `M ${s.x.toFixed(2)} ${s.y.toFixed(2)} A ${R} ${R} 0 ${span > Math.PI ? 1 : 0} 1 ${e.x.toFixed(2)} ${e.y.toFixed(2)}`
+  }
 
   return (
-    <div className="card" style={{ marginBottom: 32 }}>
-      <div className="card-header">
-        <div>
-          <h3 className="card-title">Explainable AI — 6-step analysis</h3>
-          <p className="card-subtitle">How the model thinks, step by step · {ticker}</p>
-        </div>
-        <button
-          className={`btn ${playing ? '' : 'btn-primary'}`}
-          style={{ fontSize: 12, minWidth: 120 }}
-          onClick={() => { setPlaying(false); setActiveStep(null); setTimeout(() => setPlaying(true), 50) }}
-        >
-          {playing ? '⟳ Playing…' : '▶ Auto-play'}
-        </button>
-      </div>
-      <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {steps.map((s, i) => (
-          <XAIStep
-            key={i} n={i + 1} title={s.title} tooltip={s.tooltip}
-            active={activeStep === i}
-            done={(activeStep ?? -1) > i}
-            onClick={() => toggle(i)}
+    <div style={{ borderRadius: 14, overflow: 'hidden', border: `1px solid ${D.border}`, marginBottom: 32 }}>
+
+      {/* ── Top header bar ── */}
+      <div style={{
+        background: D.bg, padding: '14px 24px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        borderBottom: `1px solid ${D.border}`,
+      }}>
+        <span style={{ fontSize: 16, fontWeight: 700, color: D.text, letterSpacing: '-0.3px' }}>
+          XAI Trading Dashboard
+        </span>
+        <div style={{ display: 'flex', gap: 32, alignItems: 'center' }}>
+          {[
+            { label: 'AI MODEL',       value: modelType === 'LSTM' ? 'LSTM' : 'Random Forest', color: D.blue },
+            { label: 'MARKET CONTEXT', value: regime.label,   color: '#a78bfa' },
+            { label: 'SIGNAL',         value: signal.label,   color: signal.hex },
+            { label: 'CONFIDENCE',     value: `${confidence}.0%`, color: D.green },
+          ].map(s => (
+            <div key={s.label} style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 9, color: D.muted, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 2 }}>{s.label}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, fontFamily: 'var(--mono)', color: s.color }}>{s.value}</div>
+            </div>
+          ))}
+          <button
+            style={{
+              padding: '6px 14px', borderRadius: 6, fontSize: 11, cursor: 'pointer',
+              background: playing ? D.border : D.active, color: '#fff', border: 'none',
+              fontFamily: 'var(--mono)', fontWeight: 600, marginLeft: 8,
+            }}
+            onClick={() => { setActiveNode(0); setPlaying(true) }}
           >
-            {s.content}
-          </XAIStep>
-        ))}
+            {playing ? '⟳' : '▶ Play'}
+          </button>
+        </div>
       </div>
+
+      {/* ── Feature importance chart ── */}
+      <div style={{ background: D.panel, padding: '28px 28px 8px', borderBottom: `1px solid ${D.border}` }}>
+        <svg viewBox="0 0 680 200" style={{ width: '100%', display: 'block' }}>
+          <defs>
+            <linearGradient id="barGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%"   stopColor={D.blue}/>
+              <stop offset="100%" stopColor={D.purple}/>
+            </linearGradient>
+          </defs>
+
+          {/* X-axis grid lines + labels */}
+          {[0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100].map(v => {
+            const x = 90 + (v / 100) * 560
+            return (
+              <g key={v}>
+                <line x1={x} x2={x} y1={10} y2={160} stroke={D.border} strokeWidth={1}/>
+                <text x={x} y={175} fontSize={10} fill={D.muted} textAnchor="middle" fontFamily="var(--mono)">{v}</text>
+              </g>
+            )
+          })}
+          <text x={670} y={175} fontSize={10} fill={D.muted} textAnchor="end" fontFamily="var(--mono)">Weight (%) →</text>
+
+          {/* Bars */}
+          {features.map((f, i) => {
+            const y = 20 + i * 38
+            const w = (f.weight / 100) * 560
+            return (
+              <g key={f.label}>
+                <text x={84} y={y + 14} fontSize={12} fill={D.text} textAnchor="end" fontFamily="var(--mono)" fontWeight={500}>{f.label}</text>
+                <rect x={90} y={y} width={560} height={22} rx={3} fill={D.border} opacity={0.5}/>
+                <rect x={90} y={y} width={w}   height={22} rx={3} fill="url(#barGrad)"/>
+                <text x={90 + w + 6} y={y + 15} fontSize={11} fill="#a0b8ff" fontFamily="var(--mono)" fontWeight={600}>{f.weight}%</text>
+              </g>
+            )
+          })}
+        </svg>
+      </div>
+
+      {/* ── Pipeline + Gauge section ── */}
+      <div style={{
+        background: D.bg, padding: '24px 28px',
+        display: 'flex', alignItems: 'center', gap: 20,
+        borderBottom: `1px solid ${D.border}`,
+      }}>
+        {/* Left labels */}
+        <div style={{ minWidth: 160 }}>
+          <div style={{ fontSize: 11, color: D.muted, fontWeight: 600, letterSpacing: '0.05em', marginBottom: 4 }}>1. INFERENCE CORE</div>
+          <div style={{ fontSize: 11, color: D.muted, fontWeight: 600, letterSpacing: '0.05em', marginBottom: 20 }}>2. EXPLANATION PIPELINE</div>
+          {/* Confidence gauge */}
+          <svg width={140} height={140} viewBox="0 0 140 140">
+            <path d={arcPath(startAngle, arcSpan)} fill="none" stroke="#2a2d2a" strokeWidth={11} strokeLinecap="round"/>
+            <path d={arcPath(startAngle, filled)}  fill="none" stroke={D.green}  strokeWidth={11} strokeLinecap="round"
+              style={{ transition: 'stroke-dashoffset 0.9s ease' }}/>
+            <text x={cx} y={cy - 6}  fontSize={22} fontWeight={800} fill={D.green}  textAnchor="middle" fontFamily="var(--mono)">{confidence}%</text>
+            <text x={cx} y={cy + 14} fontSize={9}  fill={D.muted}                   textAnchor="middle" fontFamily="var(--mono)" letterSpacing="0.1em">CONFIDENCE</text>
+          </svg>
+        </div>
+
+        {/* Horizontal pipeline */}
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0 }}>
+          {PIPELINE_NODES.map((node, i) => {
+            const isActive = i === activeNode
+            const isDone   = i < activeNode
+            return (
+              <div key={node.id} style={{ display: 'flex', alignItems: 'center' }}>
+                {/* Dashed connector (not before first) */}
+                {i > 0 && (
+                  <div style={{
+                    width: 32, height: 2,
+                    borderTop: `2px dashed ${isDone || isActive ? D.blue : D.border}`,
+                    transition: 'border-color 0.4s',
+                  }}/>
+                )}
+                {/* Node */}
+                <button
+                  onClick={() => setActiveNode(i)}
+                  style={{
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+                    background: 'none', border: 'none', cursor: 'pointer',
+                  }}
+                >
+                  <div style={{
+                    width: 56, height: 56, borderRadius: '50%',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: isActive
+                      ? `radial-gradient(circle at 40% 40%, ${D.active}, #1a3a8a)`
+                      : isDone ? '#1a2e4a' : D.panel,
+                    border: `1.5px solid ${isActive ? D.active : isDone ? '#2a4a7a' : D.border}`,
+                    color: isActive ? '#fff' : isDone ? D.blue : D.muted,
+                    boxShadow: isActive ? `0 0 20px ${D.active}55` : 'none',
+                    transition: 'all 0.3s ease',
+                  }}>
+                    {node.icon}
+                  </div>
+                  <span style={{
+                    fontSize: 10, fontFamily: 'var(--mono)', letterSpacing: '0.04em',
+                    color: isActive ? D.text : D.muted,
+                    fontWeight: isActive ? 700 : 400,
+                  }}>
+                    {node.label}
+                  </span>
+                  {isActive && (
+                    <span style={{ fontSize: 9, color: D.blue, fontFamily: 'var(--mono)' }}>
+                      {activeNode === 0 ? 'Loading data' :
+                       activeNode === 1 ? 'Weighting features' :
+                       activeNode === 2 ? 'Matching patterns' :
+                       activeNode === 3 ? 'Applying regime bias' :
+                       activeNode === 4 ? 'Computing score' : 'Generating signal'}
+                    </span>
+                  )}
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* ── Controls section ── */}
+      <div style={{ background: D.panel, padding: '20px 28px' }}>
+        {/* Model type + regime row */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 32, marginBottom: 20, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ fontSize: 12, color: D.muted, fontFamily: 'var(--mono)' }}>Model Type</span>
+            <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: `1px solid ${D.border}` }}>
+              {(['LSTM', 'RF'] as const).map(t => (
+                <button key={t} onClick={() => setModelType(t)} style={{
+                  padding: '5px 14px', fontSize: 12, fontFamily: 'var(--mono)', fontWeight: 600,
+                  background: modelType === t ? D.active : 'transparent',
+                  color: modelType === t ? '#fff' : D.muted, border: 'none', cursor: 'pointer',
+                }}>
+                  {t === 'RF' ? 'Random Forest' : 'LSTM'}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 12, color: D.muted, fontFamily: 'var(--mono)' }}>Market Regime</span>
+            <div style={{
+              padding: '5px 14px', borderRadius: 6, fontSize: 12, fontFamily: 'var(--mono)',
+              background: D.bg, border: `1px solid ${D.border}`, color: '#a78bfa',
+            }}>
+              {regime.label} ▾
+            </div>
+          </div>
+        </div>
+
+        {/* Indicator sliders */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 40px' }}>
+          {[
+            { label: 'RSI (0-100)',  value: Math.round(rsi),                    min: 0,    max: 100, step: 1   },
+            { label: 'MACD',        value: parseFloat(macd.toFixed(2)),          min: -10,  max: 10,  step: 0.1 },
+            { label: 'Volume (%)',  value: Math.round(prices.length / 2.5),      min: 0,    max: 300, step: 1   },
+            { label: 'Price vs EMA', value: lastClose && ema20 ? Math.round((lastClose / ema20 - 1) * 100 + 50) : 50, min: 0, max: 100, step: 1 },
+          ].map(s => (
+            <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 11, color: D.muted, fontFamily: 'var(--mono)', minWidth: 90 }}>{s.label}</span>
+              <input type="range" min={s.min} max={s.max} step={s.step}
+                defaultValue={s.value}
+                style={{ flex: 1, accentColor: D.blue, cursor: 'pointer' }}
+                readOnly
+              />
+              <div style={{
+                minWidth: 46, padding: '3px 8px', borderRadius: 5, textAlign: 'center',
+                background: D.bg, border: `1px solid ${D.border}`,
+                fontSize: 11, fontFamily: 'var(--mono)', color: D.text,
+              }}>
+                {s.value}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Output row */}
+        <div style={{
+          marginTop: 20, padding: '16px 20px', borderRadius: 10,
+          background: D.bg, border: `1px solid ${signal.hex}30`,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16,
+        }}>
+          <div>
+            <div style={{ fontSize: 9, color: D.muted, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>Signal</div>
+            <div style={{ fontSize: 28, fontWeight: 800, fontFamily: 'var(--mono)', color: signal.hex }}>{signal.label.toUpperCase()}</div>
+          </div>
+          {[
+            { label: 'Entry',     value: `$${lastClose.toFixed(2)}`,                                    color: D.text },
+            { label: 'Target',   value: avgPerTrade > 0 ? `$${targetPrice.toFixed(2)}` : '—',          color: '#4ade80' },
+            { label: 'Stop Loss', value: `$${stopPrice.toFixed(2)}`,                                    color: '#f87171' },
+            { label: 'Strategy', value: bestStrat.length > 18 ? bestStrat.slice(0, 16) + '…' : bestStrat || '—', color: D.blue },
+          ].map(r => (
+            <div key={r.label} style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 9, color: D.muted, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>{r.label}</div>
+              <div style={{ fontSize: 15, fontWeight: 700, fontFamily: 'var(--mono)', color: r.color }}>{r.value}</div>
+            </div>
+          ))}
+          <div style={{ fontSize: 9, color: D.muted, fontStyle: 'italic', maxWidth: 160, lineHeight: 1.5 }}>
+            Research only. Not financial advice.
+          </div>
+        </div>
+      </div>
+
+      <style>{`
+        input[type=range] { height: 4px; }
+      `}</style>
     </div>
   )
 }
