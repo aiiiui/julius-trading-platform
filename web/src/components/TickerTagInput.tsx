@@ -60,6 +60,21 @@ export default function TickerTagInput({ tickers, onChange }: Props) {
 
   const remove = (sym: string) => onChange(tickers.filter(t => t !== sym))
 
+  const onPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = e.clipboardData.getData('text')
+    const syms = text
+      .split(/[\s,;\n\r\t|/\\]+/)
+      .map(s => s.trim().toUpperCase())
+      .filter(s => s.length >= 1 && s.length <= 12 && /^[A-Z0-9.\-^=]+$/.test(s))
+    if (syms.length > 1) {
+      e.preventDefault()
+      onChange([...new Set([...tickers, ...syms])])
+      setInput('')
+      setResults([])
+      setOpen(false)
+    }
+  }
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (open && results.length > 0) {
       if (e.key === 'ArrowDown') { e.preventDefault(); setFocused(f => Math.min(f + 1, results.length - 1)); return }
@@ -121,7 +136,8 @@ export default function TickerTagInput({ tickers, onChange }: Props) {
           onChange={e => setInput(e.target.value.toUpperCase())}
           onKeyDown={onKeyDown}
           onFocus={() => input && setOpen(results.length > 0)}
-          placeholder={tickers.length === 0 ? 'Type any ticker — AAPL, BTC-USD, 7203.T…' : ''}
+          onPaste={onPaste}
+          placeholder={tickers.length === 0 ? 'Type a ticker or paste a list — AAPL, MSFT, NVDA …' : ''}
           style={{
             flex: '1 1 120px', minWidth: 100, border: 'none', outline: 'none',
             background: 'transparent', fontFamily: 'var(--mono)', fontWeight: 600,
