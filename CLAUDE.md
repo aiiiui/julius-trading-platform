@@ -53,13 +53,15 @@ trading-platform/
         │   ├── TabLive.tsx      # Live Markets (chart, scanner, news, portfolio)
         │   ├── TabPortfolio.tsx
         │   ├── TabComparison.tsx
-        │   ├── TabAI.tsx        # LangGraph AI analysis
+        │   ├── TabAI.tsx        # XAI 6-step stepper + LSTM diagnostics + LangGraph analysis
         │   └── TabRegime.tsx
         ├── components/
         │   ├── ui.tsx               # Icons, Sparkline, SignalPill, fmt, useInterval
         │   ├── TradingViewChart.tsx
         │   ├── ValuationBar.tsx      # Gradient bar + Buy Now/Fair/Expensive labels
-        │   └── TickerTagInput.tsx    # Tag-chip input with YF autocomplete
+        │   ├── TickerTagInput.tsx    # Tag-chip input with YF autocomplete
+        │   ├── IntroScreen.tsx       # Cinematic zoom-in intro (session-once)
+        │   └── BacktestProgress.tsx  # Live 0-100% progress screen during backtest
         └── lib/stockMeta.ts         # STOCK_DB, getSuggestions, searchStocks
 ```
 

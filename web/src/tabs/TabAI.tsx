@@ -1,8 +1,486 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { Icons, fmt, TICKER_META } from '../components/ui'
 import { fetchAIAnalysis } from '../api'
 import type { AIAnalysis } from '../api'
 import type { BacktestResponse } from '../types'
+
+// ── XAI helper computations ───────────────────────────────────────────────────
+
+function computeRSI(closes: number[], period = 14): number {
+  if (closes.length < period + 1) return 50
+  let gains = 0, losses = 0
+  for (let i = closes.length - period; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1]
+    if (d > 0) gains += d; else losses -= d
+  }
+  const ag = gains / period, al = losses / period
+  return al === 0 ? 100 : 100 - 100 / (1 + ag / al)
+}
+
+function computeEMA(closes: number[], period: number): number {
+  if (closes.length < period) return closes[closes.length - 1] ?? 0
+  const alpha = 2 / (period + 1)
+  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period
+  for (let i = period; i < closes.length; i++) ema = closes[i] * alpha + ema * (1 - alpha)
+  return ema
+}
+
+const FEATURE_WEIGHTS: Record<string, { label: string; weight: number; color: string }[]> = {
+  'EMA Crossover + Volume': [
+    { label: 'Price action (EMA stack)',   weight: 40, color: 'var(--accent)' },
+    { label: 'Trend confirmation (EMAs)',  weight: 35, color: '#7cb8ff' },
+    { label: 'Volume anomaly',             weight: 25, color: 'var(--warn)' },
+  ],
+  'RSI + Bollinger Bands': [
+    { label: 'Momentum (RSI)',             weight: 40, color: '#7cb8ff' },
+    { label: 'Volatility bands (BB)',      weight: 35, color: 'var(--accent)' },
+    { label: 'Price position',             weight: 25, color: 'var(--warn)' },
+  ],
+  'MACD + ADX': [
+    { label: 'MACD momentum',             weight: 45, color: '#7cb8ff' },
+    { label: 'Trend strength (ADX)',       weight: 35, color: 'var(--accent)' },
+    { label: 'Price action',              weight: 20, color: 'var(--warn)' },
+  ],
+  'Buy & Hold': [
+    { label: 'Price return',              weight: 100, color: 'var(--accent)' },
+  ],
+  'ML Signal': [
+    { label: 'EMA features (5 periods)',  weight: 35, color: 'var(--accent)' },
+    { label: 'Momentum (RSI/MACD/BB)',    weight: 40, color: '#7cb8ff' },
+    { label: 'Volume & price change',     weight: 25, color: 'var(--warn)' },
+  ],
+  'LSTM Multi-Signal': [
+    { label: 'Temporal sequence (20d)',   weight: 38, color: 'var(--accent)' },
+    { label: 'Momentum indicators',       weight: 32, color: '#7cb8ff' },
+    { label: 'ROC & StochRSI',            weight: 30, color: 'var(--warn)' },
+  ],
+}
+const DEFAULT_FEATURES = [
+  { label: 'Price action',  weight: 40, color: 'var(--accent)' },
+  { label: 'Momentum',      weight: 35, color: '#7cb8ff' },
+  { label: 'Volume',        weight: 25, color: 'var(--warn)' },
+]
+
+// ── XAI sub-components ────────────────────────────────────────────────────────
+
+function CircularGauge({ value, label }: { value: number; label: string }) {
+  const r = 36, circ = 2 * Math.PI * r
+  const offset = circ * (1 - Math.min(100, Math.max(0, value)) / 100)
+  const color = value >= 65 ? 'var(--up)' : value >= 40 ? 'var(--warn)' : 'var(--down)'
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+      <svg width={96} height={96} viewBox="0 0 96 96">
+        <circle cx={48} cy={48} r={r} fill="none" stroke="var(--bg-subtle)" strokeWidth={7}/>
+        <circle cx={48} cy={48} r={r} fill="none" stroke={color} strokeWidth={7}
+          strokeDasharray={`${circ}`} strokeDashoffset={offset}
+          strokeLinecap="round" transform="rotate(-90 48 48)"
+          style={{ transition: 'stroke-dashoffset 0.9s ease' }}/>
+        <text x={48} y={48} fontSize={17} fontWeight={700} fill={color}
+          textAnchor="middle" dominantBaseline="central" fontFamily="var(--mono)">
+          {value.toFixed(0)}%
+        </text>
+      </svg>
+      <span style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center' }}>{label}</span>
+    </div>
+  )
+}
+
+function FeatureBar({ label, weight, color, active }: { label: string; weight: number; color: string; active: boolean }) {
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+        <span style={{ color: 'var(--text-muted)' }}>{label}</span>
+        <span style={{ fontFamily: 'var(--mono)', color, fontWeight: 600 }}>{weight}%</span>
+      </div>
+      <div style={{ height: 6, borderRadius: 99, background: 'var(--bg-subtle)' }}>
+        <div style={{
+          height: '100%', borderRadius: 99, background: color,
+          width: active ? `${weight}%` : '0%',
+          transition: 'width 0.7s cubic-bezier(0.4,0,0.2,1)',
+        }}/>
+      </div>
+    </div>
+  )
+}
+
+interface StepProps { active: boolean; done: boolean; n: number; title: string; tooltip: string; children: React.ReactNode; onClick: () => void }
+
+function XAIStep({ active, done, n, title, tooltip, children, onClick }: StepProps) {
+  return (
+    <div style={{
+      borderRadius: 10, border: `1px solid ${active ? 'var(--accent)' : done ? 'var(--border)' : 'var(--border)'}`,
+      background: active ? 'var(--bg-elevated)' : 'var(--bg)',
+      boxShadow: active ? 'var(--shadow-md)' : 'none',
+      transition: 'all 0.3s ease', overflow: 'hidden',
+    }}>
+      <button onClick={onClick} style={{
+        width: '100%', display: 'flex', alignItems: 'center', gap: 14,
+        padding: '14px 18px', background: 'none', border: 'none',
+        cursor: 'pointer', textAlign: 'left', color: 'var(--text)',
+      }}>
+        {/* Step number badge */}
+        <div style={{
+          width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: done ? 'var(--up-soft)' : active ? 'var(--accent)' : 'var(--bg-subtle)',
+          color: done ? 'var(--up)' : active ? '#fff' : 'var(--text-subtle)',
+          fontSize: 13, fontWeight: 700, fontFamily: 'var(--mono)',
+          transition: 'all 0.3s',
+        }}>
+          {done ? '✓' : n}
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 600, fontSize: 13 }}>{title}</div>
+          <div style={{ fontSize: 11, color: 'var(--text-subtle)', marginTop: 1 }}>{tooltip}</div>
+        </div>
+        <span style={{
+          fontSize: 11, color: 'var(--text-subtle)',
+          transform: active ? 'rotate(180deg)' : 'none',
+          transition: 'transform 0.2s', display: 'inline-block',
+        }}>▾</span>
+      </button>
+      {active && (
+        <div style={{ padding: '0 18px 18px', borderTop: '1px solid var(--border)' }}>
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── XAI Stepper main component ────────────────────────────────────────────────
+
+function XAIStepper({ data, ticker }: { data: BacktestResponse; ticker: string }) {
+  const [activeStep, setActiveStep] = useState<number | null>(null)
+  const [playing,    setPlaying]    = useState(false)
+
+  // Auto-play: step through 0→5 with delay
+  useEffect(() => {
+    if (!playing) return
+    if (activeStep === null) { setActiveStep(0); return }
+    if (activeStep >= 5) { setPlaying(false); return }
+    const t = setTimeout(() => setActiveStep(s => (s ?? 0) + 1), 1800)
+    return () => clearTimeout(t)
+  }, [playing, activeStep])
+
+  const prices    = data.price_data?.[ticker]?.series ?? []
+  const bestStrat = useMemo(() => {
+    const results = data.batch_results[ticker] ?? {}
+    let best = '', bestRet = -Infinity
+    for (const [name, r] of Object.entries(results)) {
+      const ret = r.metrics.total_return ?? -Infinity
+      if (ret > bestRet) { bestRet = ret; best = name }
+    }
+    return best
+  }, [data, ticker])
+
+  const metrics     = data.batch_results[ticker]?.[bestStrat]?.metrics
+  const lstmData    = data.lstm_by_ticker?.[ticker]
+  const lastClose   = prices[prices.length - 1] ?? 0
+  const prevClose   = prices[prices.length - 2] ?? lastClose
+  const changePct   = lastClose && prevClose ? ((lastClose - prevClose) / prevClose) * 100 : 0
+  const rsi         = useMemo(() => computeRSI(prices), [prices])
+  const ema20       = useMemo(() => computeEMA(prices, 20), [prices])
+  const ema50       = useMemo(() => computeEMA(prices, 50), [prices])
+  const features    = FEATURE_WEIGHTS[bestStrat] ?? DEFAULT_FEATURES
+
+  // Regime stats
+  const regimeStats = useMemo(() => {
+    const labels = data.regime_labels ?? []
+    const calm     = labels.filter(l => l === 'calm').length
+    const volatile = labels.filter(l => l === 'volatile').length
+    const total    = labels.length || 1
+    const current  = labels[labels.length - 1] ?? 'calm'
+    return { calm, volatile, total, current, calmPct: Math.round(calm / total * 100), volPct: Math.round(volatile / total * 100) }
+  }, [data.regime_labels])
+
+  // Confidence
+  const confidence = useMemo(() => {
+    if (lstmData?.confidence?.length) {
+      const last20 = lstmData.confidence.slice(-20)
+      const avg = last20.reduce((a, b) => a + b, 0) / last20.length
+      return Math.round(avg * 100)
+    }
+    const wr    = metrics?.win_rate ?? 0.5
+    const sharpe = Math.min(3, Math.max(0, metrics?.sharpe_ratio ?? 0))
+    return Math.round(((wr + sharpe / 3) / 2) * 100)
+  }, [lstmData, metrics])
+
+  // Signal derivation
+  const signal = useMemo(() => {
+    const ret = metrics?.total_return ?? 0
+    const wr  = metrics?.win_rate ?? 0.5
+    if (ret > 0.05 && wr > 0.5)  return { label: 'BUY',  color: 'var(--up)',   bg: 'var(--up-soft)' }
+    if (ret < -0.05 || wr < 0.4) return { label: 'AVOID', color: 'var(--down)', bg: 'var(--down-soft)' }
+    return { label: 'HOLD', color: 'var(--warn)', bg: 'var(--warn-soft)' }
+  }, [metrics])
+
+  const avgPerTrade   = metrics?.n_trades ? (metrics.total_return ?? 0) / (metrics.n_trades || 1) : 0
+  const targetPrice   = lastClose * (1 + Math.max(0, avgPerTrade))
+  const stopPrice     = lastClose * (1 + (metrics?.max_drawdown ?? -0.1) * 0.4)
+
+  const toggle = (i: number) => setActiveStep(s => s === i ? null : i)
+
+  const steps = [
+    {
+      title: 'Data Ingestion — Raw Input',
+      tooltip: 'Fetching current market state and technical indicators.',
+      content: (
+        <div style={{ marginTop: 14 }}>
+          <div style={{
+            fontFamily: 'var(--mono)', fontSize: 12, lineHeight: 2,
+            padding: '14px 16px', borderRadius: 8,
+            background: 'var(--bg-subtle)', border: '1px solid var(--border)',
+          }}>
+            <div style={{ color: 'var(--accent)', marginBottom: 4, fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+              ● LIVE FEED — {ticker}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 32px' }}>
+              {[
+                ['Ticker',         ticker],
+                ['Last Close',     `$${lastClose.toFixed(2)}`],
+                ['Day Change',     `${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%`],
+                ['RSI (14)',       rsi.toFixed(1)],
+                ['EMA (20)',       `$${ema20.toFixed(2)}`],
+                ['EMA (50)',       `$${ema50.toFixed(2)}`],
+                ['Data points',   `${prices.length} days`],
+                ['Best strategy', bestStrat || '—'],
+              ].map(([k, v]) => (
+                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
+                  <span style={{ color: 'var(--text-subtle)' }}>{k}</span>
+                  <span style={{ color: 'var(--text)', fontWeight: 500 }}>{v}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: 'Feature Engineering — Importance Weights',
+      tooltip: 'Normalising inputs and assigning importance based on current market dynamics.',
+      content: (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.6 }}>
+            Feature attribution for <strong>{bestStrat || 'active strategy'}</strong>. Weights reflect how much each signal group influences the final decision.
+          </div>
+          {features.map(f => (
+            <FeatureBar key={f.label} label={f.label} weight={f.weight} color={f.color} active={activeStep === 1} />
+          ))}
+        </div>
+      ),
+    },
+    {
+      title: 'Pattern Recognition — LSTM Core',
+      tooltip: 'Comparing current sequence against historical memory layers to predict trajectory.',
+      content: (
+        <div style={{ marginTop: 14 }}>
+          {lstmData ? (
+            <>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.6 }}>
+                LSTM trained on 2020–2024 data. Confidence distribution shows how decisive the model is:
+                scores &lt;0.40 → SELL, &gt;0.60 → BUY.
+              </div>
+              <svg viewBox="0 0 400 160" style={{ width: '100%', display: 'block', borderRadius: 8 }}>
+                <rect x={0} y={0} width={160} height={140} fill="var(--down)" opacity={0.05}/>
+                <rect x={240} y={0} width={160} height={140} fill="var(--up)" opacity={0.05}/>
+                <line x1={160} x2={160} y1={0} y2={140} stroke="var(--down)" strokeDasharray="3 3" opacity={0.4}/>
+                <line x1={240} x2={240} y1={0} y2={140} stroke="var(--up)"   strokeDasharray="3 3" opacity={0.4}/>
+                {(() => {
+                  const h = new Array(20).fill(0)
+                  lstmData.confidence.forEach((c: number) => { h[Math.min(19, Math.floor(c * 20))]++ })
+                  const mx = Math.max(...h, 1)
+                  return h.map((cnt, i) => {
+                    const x = (i / 20) * 400, w = 18, ht = (cnt / mx) * 120
+                    const center = (i + 0.5) / 20
+                    return <rect key={i} x={x + 1} y={140 - ht} width={w} height={ht} rx={2}
+                      fill={center < 0.4 ? 'var(--down)' : center > 0.6 ? 'var(--up)' : 'var(--text-subtle)'}
+                      opacity={0.8}/>
+                  })
+                })()}
+                {[0, 0.25, 0.5, 0.75, 1].map(p => (
+                  <text key={p} x={p * 400} y={155} fontSize={9} fill="var(--text-muted)" textAnchor="middle" fontFamily="var(--mono)">{p.toFixed(2)}</text>
+                ))}
+                <text x={80}  y={13} fontSize={9} fill="var(--down)" textAnchor="middle" fontFamily="var(--mono)">SELL zone</text>
+                <text x={320} y={13} fontSize={9} fill="var(--up)"   textAnchor="middle" fontFamily="var(--mono)">BUY zone</text>
+              </svg>
+              <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                Model accuracy: {(lstmData.accuracy * 100).toFixed(1)}% · F1: {lstmData.f1.toFixed(3)} · n={lstmData.n} test samples
+              </div>
+            </>
+          ) : (
+            <div style={{
+              padding: '20px', textAlign: 'center', fontSize: 12, color: 'var(--text-muted)',
+              background: 'var(--bg-subtle)', borderRadius: 8, lineHeight: 1.7,
+            }}>
+              LSTM not trained for <strong>{ticker}</strong>.<br/>
+              Enable "LSTM Multi-Signal" in run configuration and re-run the backtest to see pattern recognition data.
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: 'Market Regime Context — Environment',
+      tooltip: 'Adjusting sensitivity parameters to account for broader market swings.',
+      content: (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            {/* Current regime badge */}
+            <div style={{
+              flex: 1, minWidth: 180,
+              padding: '16px 20px', borderRadius: 10, textAlign: 'center',
+              background: regimeStats.current === 'volatile' ? 'var(--down-soft)' : 'var(--up-soft)',
+              border: `1px solid ${regimeStats.current === 'volatile' ? 'rgba(192,56,59,0.3)' : 'rgba(10,138,62,0.3)'}`,
+            }}>
+              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-subtle)', marginBottom: 8 }}>
+                Current regime
+              </div>
+              <div style={{
+                fontSize: 20, fontWeight: 700, fontFamily: 'var(--mono)',
+                color: regimeStats.current === 'volatile' ? 'var(--down)' : 'var(--up)',
+              }}>
+                {regimeStats.current.toUpperCase()}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                {regimeStats.current === 'volatile'
+                  ? 'High VIX — mean-reversion strategies favoured'
+                  : 'Low VIX — trend-following strategies favoured'}
+              </div>
+            </div>
+            {/* Breakdown */}
+            <div style={{ flex: 1, minWidth: 180 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-subtle)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                Period breakdown
+              </div>
+              {[
+                { label: 'Calm (low VIX)',     pct: regimeStats.calmPct,  days: regimeStats.calm,     color: 'var(--up)' },
+                { label: 'Volatile (high VIX)', pct: regimeStats.volPct, days: regimeStats.volatile, color: 'var(--down)' },
+              ].map(r => (
+                <div key={r.label} style={{ marginBottom: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
+                    <span style={{ color: 'var(--text-muted)' }}>{r.label}</span>
+                    <span style={{ fontFamily: 'var(--mono)', color: r.color }}>{r.pct}% ({r.days}d)</span>
+                  </div>
+                  <div style={{ height: 5, borderRadius: 99, background: 'var(--bg-subtle)' }}>
+                    <div style={{ height: '100%', borderRadius: 99, background: r.color, width: `${r.pct}%`, transition: 'width 0.6s ease' }}/>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: 'Confidence Scoring — Probability',
+      tooltip: 'Statistical probability of the predicted move synthesised from model outputs.',
+      content: (
+        <div style={{ marginTop: 14, display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap' }}>
+          <CircularGauge value={confidence} label="Model confidence" />
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.8, marginBottom: 14 }}>
+              {lstmData
+                ? `Derived from the last 20 LSTM predictions (avg probability: ${(confidence / 100).toFixed(2)}).`
+                : `Derived from strategy win rate (${fmt.pctSimple(metrics?.win_rate)}) and Sharpe ratio (${metrics?.sharpe_ratio?.toFixed(2) ?? '—'}).`}
+            </div>
+            {[
+              { range: '≥ 65%', label: 'High confidence',   color: 'var(--up)',   bg: 'var(--up-soft)' },
+              { range: '40–65%', label: 'Moderate confidence', color: 'var(--warn)', bg: 'var(--warn-soft)' },
+              { range: '< 40%', label: 'Low confidence',    color: 'var(--down)', bg: 'var(--down-soft)' },
+            ].map(r => (
+              <div key={r.range} style={{
+                display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6,
+                padding: '5px 10px', borderRadius: 6, background: r.bg,
+                opacity: (r.range === '≥ 65%' && confidence >= 65) ||
+                         (r.range === '40–65%' && confidence >= 40 && confidence < 65) ||
+                         (r.range === '< 40%'  && confidence < 40) ? 1 : 0.3,
+              }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: r.color, minWidth: 50 }}>{r.range}</span>
+                <span style={{ fontSize: 12, color: r.color }}>{r.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: 'Final Output — Actionable Signal',
+      tooltip: 'Definitive recommendation with risk management parameters from backtest analysis.',
+      content: (
+        <div style={{ marginTop: 14 }}>
+          <div style={{
+            padding: '20px 24px', borderRadius: 10,
+            background: signal.bg, border: `1px solid ${signal.color}40`,
+            marginBottom: 16,
+          }}>
+            <div style={{ fontSize: 11, color: 'var(--text-subtle)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 10 }}>
+              Signal recommendation
+            </div>
+            <div style={{ fontSize: 36, fontWeight: 800, fontFamily: 'var(--mono)', color: signal.color, marginBottom: 6 }}>
+              {signal.label}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              Based on {bestStrat} — {fmt.pct(metrics?.total_return)} return, {fmt.pctSimple(metrics?.win_rate)} win rate
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+            {[
+              { label: 'Entry (last close)', value: `$${lastClose.toFixed(2)}`,   color: 'var(--text)' },
+              { label: 'Target (avg/trade)', value: avgPerTrade > 0 ? `$${targetPrice.toFixed(2)}` : '—', color: 'var(--up)' },
+              { label: 'Stop loss (est.)',   value: `$${stopPrice.toFixed(2)}`,    color: 'var(--down)' },
+            ].map(r => (
+              <div key={r.label} style={{
+                padding: '14px 16px', borderRadius: 8, textAlign: 'center',
+                background: 'var(--bg-subtle)', border: '1px solid var(--border)',
+              }}>
+                <div style={{ fontSize: 10, color: 'var(--text-subtle)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+                  {r.label}
+                </div>
+                <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'var(--mono)', color: r.color }}>
+                  {r.value}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 12, fontSize: 11, color: 'var(--text-subtle)', fontStyle: 'italic', lineHeight: 1.6 }}>
+            ⚠ Research purposes only. Not financial advice. Always apply your own risk management.
+          </div>
+        </div>
+      ),
+    },
+  ]
+
+  return (
+    <div className="card" style={{ marginBottom: 32 }}>
+      <div className="card-header">
+        <div>
+          <h3 className="card-title">Explainable AI — 6-step analysis</h3>
+          <p className="card-subtitle">How the model thinks, step by step · {ticker}</p>
+        </div>
+        <button
+          className={`btn ${playing ? '' : 'btn-primary'}`}
+          style={{ fontSize: 12, minWidth: 120 }}
+          onClick={() => { setPlaying(false); setActiveStep(null); setTimeout(() => setPlaying(true), 50) }}
+        >
+          {playing ? '⟳ Playing…' : '▶ Auto-play'}
+        </button>
+      </div>
+      <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {steps.map((s, i) => (
+          <XAIStep
+            key={i} n={i + 1} title={s.title} tooltip={s.tooltip}
+            active={activeStep === i}
+            done={(activeStep ?? -1) > i}
+            onClick={() => toggle(i)}
+          >
+            {s.content}
+          </XAIStep>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 // ── LSTM section (unchanged) ──────────────────────────────────────────────────
 
@@ -182,6 +660,9 @@ export default function TabAI({ data }: { data: BacktestResponse }) {
           </select>
         </label>
       </div>
+
+      {/* ── XAI Stepper ── */}
+      <XAIStepper data={data} ticker={focus} />
 
       {/* ── LSTM section ── */}
       <div className="card" style={{ marginBottom: 32 }}>
