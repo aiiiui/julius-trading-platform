@@ -86,11 +86,12 @@ def _serialize_results(batch_results: dict) -> dict:
         for name, result in strat_map.items():
             vs = result["value_series"]
             trades_df = result["trades"]
+            raw_trades = trades_df.reset_index().to_dict("records") if not trades_df.empty else []
             out[ticker][name] = {
                 "metrics": {k: _safe(v) for k, v in result["metrics"].items()},
                 "value_series": [_safe(x) for x in vs.values],
                 "value_dates": [str(d)[:10] for d in vs.index],
-                "trades": trades_df.reset_index().to_dict("records") if not trades_df.empty else [],
+                "trades": [{**t, "date": str(t["date"])[:10]} for t in raw_trades],
             }
     if "PAIRS" in batch_results:
         pr = batch_results["PAIRS"]["Pairs Trading"]
@@ -100,6 +101,21 @@ def _serialize_results(batch_results: dict) -> dict:
             "value_series": [_safe(x) for x in vs.values],
             "value_dates": [str(d)[:10] for d in vs.index],
         }
+    return out
+
+
+def _serialize_prices(batch_results: dict) -> dict:
+    out: dict = {}
+    for ticker, strat_map in batch_results.items():
+        if ticker == "PAIRS" or not strat_map:
+            continue
+        first = next(iter(strat_map.values()))
+        ps = first.get("price_series")
+        if ps is not None:
+            out[ticker] = {
+                "series": [_safe(float(x)) for x in ps.values],
+                "dates":  [str(d)[:10] for d in ps.index],
+            }
     return out
 
 
@@ -249,6 +265,7 @@ def run_backtest_endpoint(req: BacktestReq):
         _cache["regime_labels"]  = regime
         return {
             "batch_results":  _serialize_results(results),
+            "price_data":     _serialize_prices(results),
             "lstm_by_ticker": _serialize_lstm(_cache["lstm_by_ticker"]),
             "regime_labels":  regime.tolist(),
         }

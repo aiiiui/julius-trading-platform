@@ -68,6 +68,7 @@ def run_backtest(
     return {
         "metrics":      metrics,
         "value_series": value_series,
+        "price_series": prices["Close"],
         "trades":       trades_df,
         "signals":      signals,
     }
