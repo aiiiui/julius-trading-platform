@@ -76,14 +76,23 @@ def fetch_ohlcv(ticker: str, start: str, end: str, force_refresh: bool = False) 
 
 
 def fetch_multiple(tickers: list[str], start: str, end: str, force_refresh: bool = False) -> dict[str, pd.DataFrame]:
-    """Fetch OHLCV for a list of tickers. Returns {ticker: DataFrame}."""
-    result = {}
-    for ticker in tickers:
+    """Fetch OHLCV for a list of tickers in parallel. Returns {ticker: DataFrame}."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _one(ticker):
         try:
-            result[ticker] = fetch_ohlcv(ticker, start, end, force_refresh)
-            print(f"  ✓ {ticker}: {len(result[ticker])} trading days")
+            df = fetch_ohlcv(ticker, start, end, force_refresh)
+            print(f"  ✓ {ticker}: {len(df)} trading days")
+            return ticker, df
         except Exception as e:
             print(f"  ✗ {ticker}: {e}")
+            return ticker, None
+
+    result = {}
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        for ticker, df in ex.map(_one, tickers):
+            if df is not None:
+                result[ticker] = df
     return result
 
 

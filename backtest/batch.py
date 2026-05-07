@@ -66,20 +66,19 @@ def run_all_stocks(
     total_steps = len(tickers) + (1 if use_pairs else 0)
     step = 0
 
-    # ── Fetch test-period prices for all tickers ──────────────────────────
+    # ── Fetch all prices in parallel ──────────────────────────────────────
     if progress_callback:
         progress_callback(step, total_steps, "Fetching price data...")
 
     universe_prices = fetch_multiple(tickers, start, end)
 
-    # ── Fetch training prices if needed ───────────────────────────────────
     train_prices_all = {}
     if needs_fit:
         if progress_callback:
             progress_callback(step, total_steps, "Fetching training data (2020–2024)...")
         train_prices_all = fetch_multiple(tickers, train_start, "2024-12-31")
 
-    # ── Per-ticker loop ───────────────────────────────────────────────────
+    # ── Per-ticker loop (sequential — data is already fetched) ────────────
     for ticker in tickers:
         step += 1
         if progress_callback:
@@ -93,7 +92,6 @@ def run_all_stocks(
         ticker_results: dict = {}
 
         for strategy in strategies:
-            # Re-instantiate ML strategies per ticker so fit() state doesn't leak
             if strategy.name in REQUIRES_FIT:
                 strat = _reinstantiate(strategy)
                 if ticker in train_prices_all:
@@ -105,8 +103,6 @@ def run_all_stocks(
                 else:
                     print(f"  Skipping {strat.name} for {ticker}: no training data")
                     continue
-
-                # Store LSTMStrategy object for AI Analysis tab
                 if strat.name == "LSTM Multi-Signal":
                     metadata["lstm_by_ticker"][ticker] = strat
             else:
@@ -146,6 +142,8 @@ def _reinstantiate(strategy):
     """
     from strategies.ml_signal import MLSignal
     from strategies.lstm_strategy import LSTMStrategy
+    from strategies.ma_crossover import MACrossover
+    from strategies.random_mc import RandomMonteCarlo
 
     cls = type(strategy)
 
@@ -165,6 +163,12 @@ def _reinstantiate(strategy):
 
     if cls is MLSignal:
         return cls(train_end=strategy.train_end)
+
+    if cls is MACrossover:
+        return cls(strategy.short_window, strategy.long_window)
+
+    if cls is RandomMonteCarlo:
+        return cls(n_runs=strategy.n_runs)
 
     if hasattr(strategy, "train_end"):
         return cls(train_end=strategy.train_end)

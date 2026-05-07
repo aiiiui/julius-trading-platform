@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { JuliusLogo } from './JuliusLogo'
 
 export default function IntroScreen({ onDone }: { onDone: () => void }) {
   const [phase, setPhase] = useState<'in' | 'hold' | 'out'>('in')
@@ -41,20 +42,15 @@ export default function IntroScreen({ onDone }: { onDone: () => void }) {
         transition: 'opacity 1.2s ease',
       }} />
 
-      {/* Brand mark */}
+      {/* Brand mark — Julius Caesar medallion */}
       <div style={{
-        width: 88, height: 88, borderRadius: 22,
-        background: 'linear-gradient(145deg, #1e6040 0%, #0f3525 100%)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: 46, fontFamily: 'var(--serif)', fontStyle: 'italic',
-        color: '#7ee5a3',
         marginBottom: 28,
-        boxShadow: '0 0 80px rgba(95,212,138,0.2), inset 0 1px 0 rgba(255,255,255,0.08)',
         opacity: visible ? 1 : 0,
         transform: visible ? 'scale(1) translateY(0)' : 'scale(0.3) translateY(20px)',
         transition: 'opacity 0.7s cubic-bezier(0.16,1,0.3,1), transform 0.7s cubic-bezier(0.16,1,0.3,1)',
+        filter: 'drop-shadow(0 0 28px rgba(201,162,39,0.35))',
       }}>
-        J
+        <JuliusLogo size={110} />
       </div>
 
       {/* Name */}

@@ -111,19 +111,11 @@ input, select { font-family: inherit; }
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 8px 24px;
+  padding: 8px 8px 24px;
 }
 .brand-mark {
-  width: 28px; height: 28px;
-  border-radius: 8px;
-  background: var(--text);
-  color: var(--bg);
-  display: grid;
-  place-items: center;
-  font-family: var(--serif);
-  font-size: 20px;
-  font-style: italic;
-  line-height: 1;
+  display: block;
+  flex-shrink: 0;
 }
 .brand-name {
   font-family: var(--serif);

@@ -9,6 +9,7 @@ import TabAgents    from './tabs/TabAgents'
 import { runBacktest, fetchLivePrices, fetchStrategies } from './api'
 import TickerTagInput from './components/TickerTagInput'
 import IntroScreen from './components/IntroScreen'
+import { JuliusLogo } from './components/JuliusLogo'
 import BacktestProgress from './components/BacktestProgress'
 import type { BacktestResponse, RunSettings, Tweaks } from './types'
 
@@ -149,7 +150,7 @@ export default function App() {
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">J</div>
+          <JuliusLogo size={42} />
           <div className="brand-name">Julius</div>
         </div>
 

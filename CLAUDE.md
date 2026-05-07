@@ -67,10 +67,29 @@ trading-platform/
 
 ## Key Rules
 
-- **No over-engineering.** This is a personal research tool — build exactly what's asked, no extra abstractions.
+- **Suggest improvements, always ask first.** If a better approach exists, propose it clearly and wait for approval before implementing.
+- **Never deploy or push to any website without explicit permission.** Always ask before any deployment action.
 - **Free APIs first.** Scope new features to free/no-key APIs. Leave paid integration as clean stubs.
 - **Always verify servers are running** with `curl` before reporting work as done.
 - **No git repo** — there is no version control; be careful with destructive file changes.
+
+## Safety
+
+- Never delete or overwrite any file without listing what will be removed and getting approval first — no git means no recovery.
+- Do not touch `data/cache/` parquet files — they are live data and expensive to regenerate.
+- Always use the venv (`/Users/ttouch/trading-platform/venv/bin/...`) — never install packages globally.
+- If a port is already in use, report it rather than killing the process silently.
+
+## Scope
+
+- One thing at a time. If a fix touches something adjacent that looks improvable, flag it separately — do not bundle it in.
+- If a change affects more than one file, list all affected files and get approval before proceeding.
+
+## Communication
+
+- Keep responses short — bullet points, not paragraphs.
+- If something fails mid-task, stop and report the exact error. Do not try alternative approaches silently.
+- If a task is unclear, ask one specific question before starting — do not assume.
 
 ## API Endpoints (api.py)
 
